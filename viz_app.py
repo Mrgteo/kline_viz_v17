@@ -11,13 +11,24 @@ from __future__ import annotations
 import math
 from datetime import date
 import streamlit as st
+import streamlit.components.v1 as components
 import pandas as pd
 from streamlit_echarts import st_echarts
 
-import data_layer as dl
+import data_layer as _dl_v17
+import data_layer_v23 as _dl_v23
 from kline_chart import build_kline_option, build_thumbnail_option
 from waterfall import build_waterfall_option
 from micro_compare import build_micro_compare_option
+from micro_compare_v23 import build_micro_compare_html_v23
+
+
+def _get_dl(algo_key: str):
+    return _dl_v17 if algo_key == "v1.7" else _dl_v23
+
+
+# 默认指向 v1.7，模块顶部静态引用保持兼容
+dl = _dl_v17
 
 st.set_page_config(
     page_title="K线相似度匹配 v1.7",
@@ -404,36 +415,154 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
+# ============== 日期选择器中文化（替换 BaseWeb calendar 的英文月份/星期/AM-PM 等） ==============
+components.html(
+    """
+    <script>
+    (function() {
+      const doc = (window.parent && window.parent.document) || document;
+      const MONTHS = {
+        'January':'1月','February':'2月','March':'3月','April':'4月','May':'5月','June':'6月',
+        'July':'7月','August':'8月','September':'9月','October':'10月','November':'11月','December':'12月',
+        'Jan':'1月','Feb':'2月','Mar':'3月','Apr':'4月','Jun':'6月','Jul':'7月',
+        'Aug':'8月','Sep':'9月','Sept':'9月','Oct':'10月','Nov':'11月','Dec':'12月'
+      };
+      const WEEKDAYS = {
+        'Sunday':'周日','Monday':'周一','Tuesday':'周二','Wednesday':'周三',
+        'Thursday':'周四','Friday':'周五','Saturday':'周六',
+        'Sun':'日','Mon':'一','Tue':'二','Wed':'三','Thu':'四','Fri':'五','Sat':'六',
+        'Su':'日','Mo':'一','Tu':'二','We':'三','Th':'四','Fr':'五','Sa':'六',
+        'S':'日','M':'一','T':'二','W':'三','F':'五'
+      };
+      const ARIA_TIPS = {
+        'Previous Month':'上一月','Next Month':'下一月',
+        'Previous Year':'上一年','Next Year':'下一年',
+        'Choose date':'选择日期','Choose a date':'选择日期','Open calendar':'打开日历',
+        'Select a month':'选择月份','Select a year':'选择年份'
+      };
+
+      function transform(t) {
+        if (!t) return null;
+        const s = t.trim();
+        if (!s) return null;
+        // "January 2026" / "January, 2026" → "2026年1月"
+        let m = s.match(/^([A-Za-z]+)[,\\s]+(\\d{4})$/);
+        if (m && MONTHS[m[1]]) return s.replace(s, m[2] + '年' + MONTHS[m[1]]);
+        // 纯英文月名
+        if (MONTHS[s]) return MONTHS[s];
+        // 纯英文星期
+        if (WEEKDAYS[s]) return WEEKDAYS[s];
+        return null;
+      }
+
+      function walkTextNodes(root) {
+        if (!root || !root.ownerDocument) return;
+        const d = root.ownerDocument;
+        try {
+          const walker = d.createTreeWalker(root, NodeFilter.SHOW_TEXT, null);
+          const nodes = [];
+          let cur;
+          while ((cur = walker.nextNode())) nodes.push(cur);
+          nodes.forEach(n => {
+            const v = n.nodeValue;
+            if (!v) return;
+            const rep = transform(v);
+            if (rep !== null && rep !== v.trim()) {
+              n.nodeValue = v.replace(v.trim(), rep);
+            }
+          });
+        } catch (e) {}
+      }
+
+      function translateAria(root) {
+        if (!root || !root.querySelectorAll) return;
+        root.querySelectorAll('[aria-label]').forEach(el => {
+          const a = el.getAttribute('aria-label');
+          if (!a) return;
+          if (ARIA_TIPS[a]) { el.setAttribute('aria-label', ARIA_TIPS[a]); return; }
+          for (const k in ARIA_TIPS) {
+            if (a.includes(k)) {
+              el.setAttribute('aria-label', a.replace(k, ARIA_TIPS[k]));
+              break;
+            }
+          }
+          // aria-label 里嵌入了 "January 2026" 的情况
+          for (const k in MONTHS) {
+            if (a.includes(k)) {
+              el.setAttribute('aria-label',
+                a.replace(new RegExp('\\\\b' + k + '\\\\b'), MONTHS[k]));
+              break;
+            }
+          }
+        });
+      }
+
+      function translateAll() {
+        // 日历本体可能挂在 body 上（BaseWeb Layer / popover）
+        const targets = doc.querySelectorAll(
+          '[data-baseweb="calendar"], [data-baseweb="popover"], [data-baseweb="datepicker"], ' +
+          '[data-baseweb="menu"], [data-baseweb="list"]'
+        );
+        targets.forEach(t => { walkTextNodes(t); translateAria(t); });
+      }
+
+      // 首次 + 持续观察 + 定时兜底
+      translateAll();
+      try {
+        const mo = new MutationObserver(() => translateAll());
+        mo.observe(doc.body, { childList: true, subtree: true, characterData: true });
+      } catch (e) {}
+      setInterval(translateAll, 300);
+    })();
+    </script>
+    """,
+    height=0,
+)
+
 
 @st.cache_resource(show_spinner="加载股票列表...")
-def cached_stock_list():
-    return dl.load_stock_list()
+def cached_stock_list(algo_key: str = "v1.7"):
+    return _get_dl(algo_key).load_stock_list()
 
 
 @st.cache_resource(show_spinner="加载日K数据（首次较慢，命中缓存秒开）...")
-def cached_daily_data(start_date: str, end_date: str):
-    si = cached_stock_list()
-    ad = dl.load_daily_data(si, start_date, end_date)
+def cached_daily_data(start_date: str, end_date: str, algo_key: str = "v1.7"):
+    _dl = _get_dl(algo_key)
+    si = cached_stock_list(algo_key)
+    ad = _dl.load_daily_data(si, start_date, end_date)
     return ad, si
 
 
 @st.cache_resource(show_spinner="加载/构建案例库...")
-def cached_case_library(start_date: str, end_date: str):
-    ad, si = cached_daily_data(start_date, end_date)
-    return dl.load_case_library(ad, si)
+def cached_case_library(start_date: str, end_date: str, algo_key: str = "v1.7"):
+    _dl = _get_dl(algo_key)
+    ad, si = cached_daily_data(start_date, end_date, algo_key)
+    return _dl.load_case_library(ad, si)
 
 
 @st.cache_data(show_spinner="执行匹配...")
 def cached_match(stock_code: str, cut_date_str: str,
-                  start_date: str, end_date: str, top_n: int):
-    ad, si = cached_daily_data(start_date, end_date)
-    cl = cached_case_library(start_date, end_date)
-    return dl.match(stock_code, cut_date_str, ad, si, cl, top_n=top_n)
+                  start_date: str, end_date: str, top_n: int,
+                  algo_key: str = "v1.7"):
+    _dl = _get_dl(algo_key)
+    ad, si = cached_daily_data(start_date, end_date, algo_key)
+    cl = cached_case_library(start_date, end_date, algo_key)
+    return _dl.match(stock_code, cut_date_str, ad, si, cl, top_n=top_n)
 
 
 with st.sidebar:
-    st.title("📈 K线相似匹配 v1.7")
+    st.title("📈 K线相似匹配")
     st.caption("参考 go-stock 配色 · 红涨绿跌 · ECharts")
+
+    algo_choice = st.radio(
+        "算法版本",
+        ["v1.7 (断板版)", "v2.3 (连板版)"],
+        horizontal=True,
+        index=0,
+        key="algo_choice",
+    )
+    algo_key = "v1.7" if algo_choice.startswith("v1.7") else "v2.3"
+    dl = _get_dl(algo_key)
 
     stock_code = st.text_input("标的股票代码", value="002342")
     cut_date = st.date_input("切面日", value=date(2026, 1, 21))
@@ -460,7 +589,7 @@ with st.sidebar:
 if do_download:
     with st.sidebar:
         try:
-            si_list = cached_stock_list()
+            si_list = cached_stock_list(algo_key)
             total = len(si_list)
             bar = dl_prog_slot.progress(0.0, text=f"准备下载 {total} 只股票...")
 
@@ -493,11 +622,12 @@ if run:
     try:
         start_str = start_date.strftime("%Y%m%d")
         end_str = end_date.strftime("%Y%m%d")
-        result = cached_match(stock_code, cut_date_str, start_str, end_str, top_n)
+        result = cached_match(stock_code, cut_date_str, start_str, end_str, top_n, algo_key)
         st.session_state["match_result"] = result
         st.session_state["match_args"] = {
             "stock_code": stock_code, "cut_date_str": cut_date_str,
             "start_date": start_str, "end_date": end_str,
+            "algo_key": algo_key,
         }
         st.session_state["selected_cand_idx"] = 0
         st.session_state["active_view"] = "main"
@@ -507,6 +637,9 @@ if run:
 
 result = st.session_state["match_result"]
 args = st.session_state["match_args"]
+# 渲染阶段沿用执行匹配时的算法版本，避免侧边栏切换后字段不一致
+algo_key = args.get("algo_key", algo_key)
+dl = _get_dl(algo_key)
 tc = result["target_case"]
 ranked = result["ranked"]
 filter_log = result["filter_log"]
@@ -521,8 +654,13 @@ if "selected_cand_idx" not in st.session_state:
 c1, c2, c3, c4, c5 = st.columns(5)
 c1.metric("标的", f"{tc['stock_code']}", tc.get("stock_name", ""))
 c2.metric("切面日", str(tc["cut_date"])[:10])
-c3.metric("距D1", f"{tc['cut_to_d1_days']} 天", tc["cut_to_d1_category"])
-c4.metric("最大涨幅", f"{tc['max_rise']:.1%}", tc["max_rise_category"])
+if algo_key == "v1.7":
+    c3.metric("距D1", f"{tc['cut_to_d1_days']} 天", tc["cut_to_d1_category"])
+    c4.metric("最大涨幅", f"{tc['max_rise']:.1%}", tc["max_rise_category"])
+else:
+    c3.metric("连板高度", f"{tc['board_height']} 板", tc.get("height_category", ""))
+    c4.metric("启动位置", f"{tc.get('pre_rally', 0):.1%}",
+              tc.get("pre_rally_category", ""))
 c5.metric("候选总数", f"{len(ranked)}")
 
 st.write("")
@@ -548,7 +686,7 @@ view = st.session_state["active_view"]
 
 # ====================== 视图1: 标的主图 ======================
 if view == "main":
-    ad, si = cached_daily_data(args["start_date"], args["end_date"])
+    ad, si = cached_daily_data(args["start_date"], args["end_date"], algo_key)
     rows, seq_start, segments, break_periods = dl.find_segments_and_breaks(
         args["stock_code"], args["cut_date_str"], ad
     )
@@ -577,14 +715,26 @@ if view == "main":
 
     with st.expander("案例字段一览（target_case）", expanded=False):
         import json as _json
-        meta = {k: v for k, v in tc.items() if k not in ("micro", "history_special",
-                                                          "label_sequence", "special_position_seq",
-                                                          "break_d3plus_special_forms")}
+        excluded = {"micro", "history_special", "label_sequence",
+                    "special_position_seq", "break_d3plus_special_forms",
+                    "history_special_types", "volume_label_per_day"}
+        meta = {k: v for k, v in tc.items() if k not in excluded}
         st.code(_json.dumps(meta, ensure_ascii=False, indent=2, default=str),
                 language="json")
-        st.caption("微型结构 micro")
-        st.code(_json.dumps(tc["micro"], ensure_ascii=False, indent=2, default=str),
-                language="json")
+        if algo_key == "v1.7" and "micro" in tc:
+            st.caption("微型结构 micro")
+            st.code(_json.dumps(tc["micro"], ensure_ascii=False, indent=2, default=str),
+                    language="json")
+        else:
+            extras = {
+                "special_position_seq": tc.get("special_position_seq", []),
+                "history_special": tc.get("history_special", {}),
+                "history_special_types": list(tc.get("history_special_types", []) or []),
+                "label_sequence": tc.get("label_sequence", []),
+            }
+            st.caption("板型/序列字段")
+            st.code(_json.dumps(extras, ensure_ascii=False, indent=2, default=str),
+                    language="json")
 
 
 # ====================== 视图2: 候选缩略卡栅格 ======================
@@ -603,7 +753,7 @@ elif view == "grid":
         )
         if not grid_items:
             st.info("暂无得分 ≥ 60 的候选；可在「详情对比」中查看完整列表。")
-        ad2, _ = cached_daily_data(args["start_date"], args["end_date"])
+        ad2, _ = cached_daily_data(args["start_date"], args["end_date"], algo_key)
         per_row = 4
         rows_n = math.ceil(len(grid_items) / per_row)
         for r in range(rows_n):
@@ -624,6 +774,10 @@ elif view == "grid":
                     cut_d = str(c["cut_date"])[:10]
                     next_pct = (f"次日 {c['next_day_pct']:.1%}"
                                 if c["next_day_pct"] is not None else "次日 -")
+                    if algo_key == "v1.7":
+                        sub_info = f"距D1 {c.get('cut_to_d1_days', '-')}天"
+                    else:
+                        sub_info = f"{c.get('board_height', '-')}板·{c.get('end_pattern', '-')}"
                     st.markdown(
                         f"""<div class='cand-card'>
                           <div class='cand-title'>
@@ -633,7 +787,7 @@ elif view == "grid":
                             </span>
                           </div>
                           <div class='cand-meta'>
-                            切面 {cut_d} · 距D1 {c['cut_to_d1_days']}天 · {next_pct}
+                            切面 {cut_d} · {sub_info} · {next_pct}
                           </div>
                         </div>""",
                         unsafe_allow_html=True,
@@ -676,7 +830,7 @@ elif view == "detail":
         )
         st.session_state["selected_cand_idx"] = sel
         cand = ranked[sel]
-        ad3, _ = cached_daily_data(args["start_date"], args["end_date"])
+        ad3, _ = cached_daily_data(args["start_date"], args["end_date"], algo_key)
 
         # 顶部对比信息条
         m1, m2, m3, m4 = st.columns(4)
@@ -766,40 +920,95 @@ elif view == "detail":
         st.write("")
 
         # ==== 微型结构对比 / 基本指标对比 左右并排 ====
-        left, right = st.columns([1, 1])
-        with left:
+        # 暂时关闭显示（保留代码），需要恢复时把下面的 False 改为 True 即可
+        SHOW_MICRO_AND_INDICATORS = False
+        if SHOW_MICRO_AND_INDICATORS:
+         left, right = st.columns([1, 1])
+         with left:
             st.subheader("🧩 微型结构对比")
-            mc_opt = build_micro_compare_option(tc, cand, dark=dark)
-            st_echarts(options=mc_opt, height="320px",
-                       theme="dark" if dark else "white",
-                       key=f"micro_cmp_{sel}")
+            if algo_key == "v1.7":
+                mc_opt = build_micro_compare_option(tc, cand, dark=dark)
+                st_echarts(options=mc_opt, height="320px",
+                           theme="dark" if dark else "white",
+                           key=f"micro_cmp_{sel}")
+            else:
+                st.markdown(
+                    build_micro_compare_html_v23(tc, cand, dark=dark),
+                    unsafe_allow_html=True,
+                )
 
-        with right:
+         with right:
             st.subheader("📋 基本指标对比")
-            cmp_df = pd.DataFrame({
-                "项": ["最大涨幅", "涨幅档", "回撤比", "回撤档",
-                       "D1形态", "D1情绪", "D2形态", "中间涨停",
-                       "断板天数", "距D1天数", "密度", "跌停强度",
-                       "波段", "切面形态"],
-                "标的": [
-                    f"{tc['max_rise']:.1%}", tc["max_rise_category"],
-                    f"{tc['height_retracement']:.1%}", tc["height_retracement_category"],
-                    tc["break_d1_form"], tc["break_d1_emotion"], tc["break_d2_form"],
-                    tc.get("mid_zt_type", "无涨停"),
-                    f"{tc['break_actual_days']}天", f"{tc['cut_to_d1_days']}天",
-                    tc["density_category"], tc["dt_intensity"],
-                    tc["wave_category"], tc["cut_form"],
-                ],
-                "候选": [
-                    f"{cand['max_rise']:.1%}", cand["max_rise_category"],
-                    f"{cand['height_retracement']:.1%}", cand["height_retracement_category"],
-                    cand["break_d1_form"], cand["break_d1_emotion"], cand["break_d2_form"],
-                    cand.get("mid_zt_type", "无涨停"),
-                    f"{cand['break_actual_days']}天", f"{cand['cut_to_d1_days']}天",
-                    cand["density_category"], cand["dt_intensity"],
-                    cand["wave_category"], cand["cut_form"],
-                ],
-            })
+            if algo_key == "v1.7":
+                cmp_df = pd.DataFrame({
+                    "项": ["最大涨幅", "涨幅档", "回撤比", "回撤档",
+                           "D1形态", "D1情绪", "D2形态", "中间涨停",
+                           "断板天数", "距D1天数", "密度", "跌停强度",
+                           "波段", "切面形态"],
+                    "标的": [
+                        f"{tc['max_rise']:.1%}", tc["max_rise_category"],
+                        f"{tc['height_retracement']:.1%}", tc["height_retracement_category"],
+                        tc["break_d1_form"], tc["break_d1_emotion"], tc["break_d2_form"],
+                        tc.get("mid_zt_type", "无涨停"),
+                        f"{tc['break_actual_days']}天", f"{tc['cut_to_d1_days']}天",
+                        tc["density_category"], tc["dt_intensity"],
+                        tc["wave_category"], tc["cut_form"],
+                    ],
+                    "候选": [
+                        f"{cand['max_rise']:.1%}", cand["max_rise_category"],
+                        f"{cand['height_retracement']:.1%}", cand["height_retracement_category"],
+                        cand["break_d1_form"], cand["break_d1_emotion"], cand["break_d2_form"],
+                        cand.get("mid_zt_type", "无涨停"),
+                        f"{cand['break_actual_days']}天", f"{cand['cut_to_d1_days']}天",
+                        cand["density_category"], cand["dt_intensity"],
+                        cand["wave_category"], cand["cut_form"],
+                    ],
+                })
+            else:
+                def _row(case, key, fmt=None):
+                    v = case.get(key)
+                    if v is None:
+                        return "-"
+                    return fmt.format(v) if fmt else str(v)
+                cmp_df = pd.DataFrame({
+                    "项": ["连板高度", "高度档位", "末端形态", "加速次数",
+                           "最大加速持续", "加速持续档位", "加速密度",
+                           "首日振幅", "首日状态", "启动位置", "启动档位",
+                           "综合高度", "综合高度档位", "切面板型",
+                           "封板强度", "振幅档位", "开盘涨幅档位", "量能状态"],
+                    "标的": [
+                        f"{tc.get('board_height', '-')}板", tc.get("height_category", "-"),
+                        tc.get("end_pattern", "-"), str(tc.get("accel_count", "-")),
+                        f"{tc.get('max_accel_duration', '-')}天",
+                        tc.get("max_accel_category", "-"),
+                        _row(tc, "accel_density", "{:.1%}"),
+                        _row(tc, "first_day_amplitude", "{:.2%}"),
+                        tc.get("first_day_state", "-"),
+                        _row(tc, "pre_rally", "{:.2%}"),
+                        tc.get("pre_rally_category", "-"),
+                        _row(tc, "combined_height", "{:.1%}"),
+                        tc.get("combined_height_category", "-"),
+                        tc.get("cut_special", "-"), tc.get("board_strength", "-"),
+                        tc.get("amplitude_category", "-"),
+                        tc.get("open_pct_category", "-"), tc.get("volume_state", "-"),
+                    ],
+                    "候选": [
+                        f"{cand.get('board_height', '-')}板", cand.get("height_category", "-"),
+                        cand.get("end_pattern", "-"), str(cand.get("accel_count", "-")),
+                        f"{cand.get('max_accel_duration', '-')}天",
+                        cand.get("max_accel_category", "-"),
+                        _row(cand, "accel_density", "{:.1%}"),
+                        _row(cand, "first_day_amplitude", "{:.2%}"),
+                        cand.get("first_day_state", "-"),
+                        _row(cand, "pre_rally", "{:.2%}"),
+                        cand.get("pre_rally_category", "-"),
+                        _row(cand, "combined_height", "{:.1%}"),
+                        cand.get("combined_height_category", "-"),
+                        cand.get("cut_special", "-"), cand.get("board_strength", "-"),
+                        cand.get("amplitude_category", "-"),
+                        cand.get("open_pct_category", "-"), cand.get("volume_state", "-"),
+                    ],
+                })
             st.dataframe(cmp_df, hide_index=True, use_container_width=True, height=520)
 
         st.subheader("💯 打分瀑布")
