@@ -141,24 +141,38 @@ def build_kline_option(
         ])
 
     mark_lines = []
-    if d1_s is not None:
-        mark_lines.append({
-            "xAxis": categories[d1_s],
-            "lineStyle": {"color": D1_LINE_COLOR, "width": 2, "type": "dashed"},
-            "label": {"formatter": "D1", "color": D1_LINE_COLOR, "position": "insideEndTop"},
+
+    # D1 / D2 / 切面：不画竖线，用 markPoint 在该日 K 线最高点上方放置纯文字气泡
+    cut_points = []
+    def _mk_anchor(idx_s: int, text: str, color: str, offset_y: int):
+        if idx_s is None:
+            return
+        cut_points.append({
+            "name": text,
+            "coord": [categories[idx_s], sub[idx_s]["high"]],
+            "value": text,
+            "symbol": "rect",
+            "symbolSize": [1, 1],
+            "symbolOffset": [0, offset_y],
+            "itemStyle": {"color": "transparent", "borderColor": "transparent"},
+            "label": {
+                "show": True,
+                "formatter": text,
+                "color": color,
+                "fontSize": 12,
+                "fontWeight": "bold",
+                "backgroundColor": "rgba(15,23,42,0.85)",
+                "borderColor": color,
+                "borderWidth": 1,
+                "borderRadius": 4,
+                "padding": [2, 6],
+            },
         })
-    if d2_s is not None:
-        mark_lines.append({
-            "xAxis": categories[d2_s],
-            "lineStyle": {"color": D2_LINE_COLOR, "width": 2, "type": "dashed"},
-            "label": {"formatter": "D2", "color": D2_LINE_COLOR, "position": "insideEndTop"},
-        })
-    if cut_s is not None:
-        mark_lines.append({
-            "xAxis": categories[cut_s],
-            "lineStyle": {"color": CUT_LINE_COLOR, "width": 2.5},
-            "label": {"formatter": "切面", "color": CUT_LINE_COLOR, "position": "insideEndTop"},
-        })
+
+    # 三个标记沿 Y 方向错开，避免相邻日同时存在时叠到一起
+    _mk_anchor(d1_s, "D1", D1_LINE_COLOR, -18)
+    _mk_anchor(d2_s, "D2", D2_LINE_COLOR, -36)
+    _mk_anchor(cut_s, "切面", CUT_LINE_COLOR, -54)
 
     form_points = []
     if annotate_forms:
@@ -284,7 +298,10 @@ def build_kline_option(
                 "markArea": {"silent": True, "data": mark_areas} if mark_areas else None,
                 "markLine": {"symbol": ["none", "none"], "data": mark_lines, "silent": True}
                 if mark_lines else None,
-                "markPoint": {"data": form_points, "silent": True} if form_points else None,
+                "markPoint": (
+                    {"data": cut_points + form_points, "silent": True}
+                    if (cut_points or form_points) else None
+                ),
             },
             {"name": "MA5", "type": "line", "data": _calc_ma(5, values),
              "smooth": True, "showSymbol": False,
@@ -331,8 +348,9 @@ def build_thumbnail_option(rows: list[dict], cut_idx: int, *,
     if cut_s is not None:
         mark_lines.append({
             "xAxis": categories[cut_s],
-            "lineStyle": {"color": CUT_LINE_COLOR, "width": 2},
-            "label": {"formatter": "切", "color": CUT_LINE_COLOR},
+            "lineStyle": {"width": 0, "opacity": 0},
+            "label": {"formatter": "切", "color": CUT_LINE_COLOR,
+                      "fontWeight": "bold"},
         })
     text_color = "#f1f5f9" if dark else "#1f2937"
     return {
