@@ -8,7 +8,6 @@ K线相似度匹配系统 v1.7 - Streamlit 可视化前端
 """
 from __future__ import annotations
 
-import math
 from datetime import date
 import streamlit as st
 import streamlit.components.v1 as components
@@ -17,7 +16,7 @@ from streamlit_echarts import st_echarts
 
 import data_layer as _dl_v17
 import data_layer_v23 as _dl_v23
-from kline_chart import build_kline_option, build_thumbnail_option
+from kline_chart import build_kline_option
 from waterfall import build_waterfall_option
 from micro_compare import build_micro_compare_option
 from micro_compare_v23 import build_micro_compare_html_v23
@@ -646,6 +645,8 @@ filter_log = result["filter_log"]
 
 if "active_view" not in st.session_state:
     st.session_state["active_view"] = "main"
+if st.session_state["active_view"] == "grid":
+    st.session_state["active_view"] = "detail"
 if "selected_cand_idx" not in st.session_state:
     st.session_state["selected_cand_idx"] = 0
 
@@ -666,13 +667,12 @@ c5.metric("候选总数", f"{len(ranked)}")
 st.write("")
 
 # ============ 顶部导航（按钮形式 + session_state 切换） ============
-nav_cols = st.columns(3)
+nav_cols = st.columns(2)
 nav_items = [
     ("main", "📊 标的K线主图"),
-    ("grid", "🗂 候选缩略卡栅格"),
-    ("detail", "🎯 详情对比"),
+    ("detail", "🎯 相似匹配对比"),
 ]
-for col, (key, label) in zip(nav_cols, nav_items):
+for col, (key, label) in zip(nav_cols[:len(nav_items)], nav_items):
     is_active = st.session_state["active_view"] == key
     btn_type = "primary" if is_active else "secondary"
     if col.button(label, key=f"nav_{key}", use_container_width=True, type=btn_type):
@@ -737,295 +737,274 @@ if view == "main":
                     language="json")
 
 
-# ====================== 视图2: 候选缩略卡栅格 ======================
-elif view == "grid":
-    if not ranked:
-        st.warning("无候选案例")
-    else:
-        # 仅展示得分 >= 60 的候选；保留原索引以便跳转详情对应同一条
-        grid_items = [(i, c) for i, c in enumerate(ranked) if c["final_score"] >= 60]
-        st.markdown(
-            f"<p style='color:var(--text-sub); font-size:14px;'>"
-            f"已筛选得分 ≥ 60 的候选 {len(grid_items)} 条 / 全部 {len(ranked)} 条 · "
-            f"点击卡片下方「查看详情 ➜」按钮即可跳转至详情对比页"
-            f"</p>",
-            unsafe_allow_html=True,
-        )
-        if not grid_items:
-            st.info("暂无得分 ≥ 60 的候选；可在「详情对比」中查看完整列表。")
-        ad2, _ = cached_daily_data(args["start_date"], args["end_date"], algo_key)
-        per_row = 4
-        rows_n = math.ceil(len(grid_items) / per_row)
-        for r in range(rows_n):
-            cols = st.columns(per_row)
-            for j in range(per_row):
-                pos = r * per_row + j
-                if pos >= len(grid_items):
-                    break
-                idx, c = grid_items[pos]
-                with cols[j]:
-                    score = c["final_score"]
-                    if score >= 80:
-                        cls, grade = "cand-score-high", "🟢"
-                    elif score >= 60:
-                        cls, grade = "cand-score-mid", "🟡"
-                    else:
-                        cls, grade = "cand-score-low", "🔴"
-                    cut_d = str(c["cut_date"])[:10]
-                    next_pct = (f"次日 {c['next_day_pct']:.1%}"
-                                if c["next_day_pct"] is not None else "次日 -")
-                    if algo_key == "v1.7":
-                        sub_info = f"距D1 {c.get('cut_to_d1_days', '-')}天"
-                    else:
-                        sub_info = f"{c.get('board_height', '-')}板·{c.get('end_pattern', '-')}"
-                    st.markdown(
-                        f"""<div class='cand-card'>
-                          <div class='cand-title'>
-                            #{idx+1} {grade} {c['stock_code']} {c.get('stock_name','')}
-                            <span class='{cls}' style='float:right;font-size:16px;font-weight:700;'>
-                              {score:.1f}
-                            </span>
-                          </div>
-                          <div class='cand-meta'>
-                            切面 {cut_d} · {sub_info} · {next_pct}
-                          </div>
-                        </div>""",
-                        unsafe_allow_html=True,
-                    )
-                    cand_rows = dl.precompute_rows(c["stock_code"], ad2)
-                    cand_cut_idx = next(
-                        (i for i, rr in enumerate(cand_rows)
-                         if pd.Timestamp(rr["date"]) == pd.Timestamp(c["cut_date"])),
-                        None,
-                    )
-                    if cand_cut_idx is not None:
-                        thumb = build_thumbnail_option(
-                            cand_rows, cand_cut_idx,
-                            title="", dark=dark, window=30,
-                        )
-                        st_echarts(options=thumb, height="170px",
-                                   theme="dark" if dark else "white",
-                                   key=f"thumb_{idx}_{c['stock_code']}")
-                    if st.button(f"查看详情 ➜ #{idx+1}", key=f"view_{idx}",
-                                 use_container_width=True):
-                        st.session_state["selected_cand_idx"] = idx
-                        st.session_state["active_view"] = "detail"
-                        st.rerun()
-
-
-# ====================== 视图3: 详情对比 ======================
+# ====================== 视图2: 相似匹配对比（瀑布卡片） ======================
 elif view == "detail":
     if not ranked:
         st.warning("无候选案例")
     else:
-        default_idx = st.session_state.get("selected_cand_idx", 0)
-        default_idx = max(0, min(default_idx, len(ranked) - 1))
-        sel = st.selectbox(
-            "选择候选案例",
-            range(len(ranked)),
-            index=default_idx,
-            format_func=lambda i: f"#{i+1} {ranked[i]['stock_code']} "
-                                  f"{ranked[i].get('stock_name','')} "
-                                  f"得分 {ranked[i]['final_score']:.1f}",
+        # 仅展示 final_score >= 60 的候选，并按分数从高到低排序
+        ranked_filtered = [(i, c) for i, c in enumerate(ranked)
+                           if c.get("final_score", 0) >= 60]
+        ranked_filtered.sort(key=lambda x: x[1].get("final_score", 0), reverse=True)
+        st.markdown(
+            f"<p style='color:var(--text-sub); font-size:14px; margin-bottom:8px;'>"
+            f"已筛选得分 ≥ 60 的候选 {len(ranked_filtered)} 条 / 全部 {len(ranked)} 条 · "
+            f"在下方下拉框中选择候选可快速跳转至对应卡片"
+            f"</p>",
+            unsafe_allow_html=True,
         )
-        st.session_state["selected_cand_idx"] = sel
-        cand = ranked[sel]
-        ad3, _ = cached_daily_data(args["start_date"], args["end_date"], algo_key)
+        if not ranked_filtered:
+            st.info("暂无得分 ≥ 60 的候选。")
+        else:
+            # 选择候选 → 锚点跳转
+            options_idx = [orig_i for orig_i, _ in ranked_filtered]
+            default_orig = st.session_state.get("selected_cand_idx", options_idx[0])
+            if default_orig not in options_idx:
+                default_orig = options_idx[0]
 
-        # 顶部对比信息条
-        m1, m2, m3, m4 = st.columns(4)
-        m1.metric("候选代码", cand["stock_code"], cand.get("stock_name", ""))
-        m2.metric("最终得分", f"{cand['final_score']:.2f}",
-                  f"结构 {cand.get('structure_score', 0):.1f}")
-        m3.metric("距离扣分", f"-{cand.get('distance_penalty', 0):.1f}")
-        nx = (f"{cand['next_day_pct']:.2%}" if cand["next_day_pct"] is not None else "-")
-        m4.metric("次日表现", nx,
-                  "涨停" if cand.get("next_day_is_zt") else "")
+            def _fmt_choice(orig_i: int) -> str:
+                c = ranked[orig_i]
+                return (f"#{orig_i+1} {c['stock_code']} "
+                        f"{c.get('stock_name','')} "
+                        f"得分 {c['final_score']:.1f}")
 
-        st.write("")
-
-        # ==== 标的 K 线（左） / 候选 K 线（右）左右并排 ====
-        # 标的：复用主图相同的索引推导
-        tgt_rows, tgt_seq_start, tgt_segments, tgt_bps = dl.find_segments_and_breaks(
-            args["stock_code"], args["cut_date_str"], ad3,
-        )
-        tgt_cut_idx = next(
-            (i for i, rr in enumerate(tgt_rows)
-             if pd.Timestamp(rr["date"]) == pd.Timestamp(args["cut_date_str"])),
-            None,
-        )
-        tgt_d1, tgt_d2 = None, None
-        if tgt_bps and tgt_cut_idx is not None:
-            for bp in tgt_bps:
-                if bp[0] <= tgt_cut_idx:
-                    tgt_d1 = bp[0]
-                    if bp[0] + 1 < len(tgt_rows) and bp[0] + 1 <= tgt_cut_idx:
-                        tgt_d2 = bp[0] + 1
-
-        # 候选
-        cand_rows = dl.precompute_rows(cand["stock_code"], ad3)
-        cand_cut_idx = next(
-            (i for i, rr in enumerate(cand_rows)
-             if pd.Timestamp(rr["date"]) == pd.Timestamp(cand["cut_date"])),
-            None,
-        )
-        cand_seq_start, cand_segments, cand_bps = None, None, None
-        if cand_cut_idx is not None:
-            cand_rows2, cand_seq_start, cand_segments, cand_bps = dl.find_segments_and_breaks(
-                cand["stock_code"],
-                str(pd.Timestamp(cand["cut_date"]).date()),
-                ad3,
+            sel_orig = st.selectbox(
+                "选择候选案例（跳转至卡片）",
+                options_idx,
+                index=options_idx.index(default_orig),
+                format_func=_fmt_choice,
+                key="cand_jump_select",
             )
-            if cand_rows2:
-                cand_rows = cand_rows2
-        cand_d1, cand_d2 = None, None
-        if cand_bps and cand_cut_idx is not None:
-            for bp in cand_bps:
-                if bp[0] <= cand_cut_idx:
-                    cand_d1 = bp[0]
-                    if bp[0] + 1 < len(cand_rows) and bp[0] + 1 <= cand_cut_idx:
-                        cand_d2 = bp[0] + 1
+            st.session_state["selected_cand_idx"] = sel_orig
 
-        kline_left, kline_right = st.columns(2)
-        with kline_left:
-            st.subheader("🎯 标的 K 线")
-            tgt_opt = build_kline_option(
-                tgt_rows,
-                title=f"{tc['stock_code']} {tc.get('stock_name','')} "
-                      f"切面={str(tc['cut_date'])[:10]}",
-                seq_start=tgt_seq_start, cut_idx=tgt_cut_idx,
-                segments=tgt_segments, break_periods=tgt_bps,
-                d1_idx=tgt_d1, d2_idx=tgt_d2,
-                annotate_forms=annotate_forms, dark=dark, k_days=90,
+            # 注入 scrollIntoView：把 sel_orig 对应的锚点滚动到视口
+            components.html(
+                f"""
+                <script>
+                (function() {{
+                  const doc = (window.parent && window.parent.document) || document;
+                  const t = doc.getElementById('cand_anchor_{sel_orig}');
+                  if (t) {{
+                    t.scrollIntoView({{behavior:'smooth', block:'start'}});
+                  }}
+                }})();
+                </script>
+                """,
+                height=0,
             )
-            st_echarts(options=tgt_opt, height="520px",
-                       theme="dark" if dark else "white",
-                       key=f"detail_target_kline_{sel}")
 
-        with kline_right:
-            st.subheader("📈 候选 K 线")
-            opt = build_kline_option(
-                cand_rows,
-                title=f"{cand['stock_code']} {cand.get('stock_name','')} "
-                      f"切面={str(cand['cut_date'])[:10]}",
-                seq_start=cand_seq_start, cut_idx=cand_cut_idx,
-                segments=cand_segments, break_periods=cand_bps,
-                d1_idx=cand_d1, d2_idx=cand_d2,
-                annotate_forms=annotate_forms, dark=dark, k_days=90,
+            ad3, _ = cached_daily_data(args["start_date"], args["end_date"], algo_key)
+
+            # 标的 K 线（每张卡片都用，先算一次）
+            tgt_rows, tgt_seq_start, tgt_segments, tgt_bps = dl.find_segments_and_breaks(
+                args["stock_code"], args["cut_date_str"], ad3,
             )
-            st_echarts(options=opt, height="520px",
-                       theme="dark" if dark else "white",
-                       key=f"detail_kline_{sel}")
+            tgt_cut_idx = next(
+                (i for i, rr in enumerate(tgt_rows)
+                 if pd.Timestamp(rr["date"]) == pd.Timestamp(args["cut_date_str"])),
+                None,
+            )
+            tgt_d1, tgt_d2 = None, None
+            if tgt_bps and tgt_cut_idx is not None:
+                for bp in tgt_bps:
+                    if bp[0] <= tgt_cut_idx:
+                        tgt_d1 = bp[0]
+                        if bp[0] + 1 < len(tgt_rows) and bp[0] + 1 <= tgt_cut_idx:
+                            tgt_d2 = bp[0] + 1
+            tgt_title = (f"{tc['stock_code']} {tc.get('stock_name','')} "
+                         f"切面={str(tc['cut_date'])[:10]}")
 
-        st.write("")
-
-        # ==== 微型结构对比 / 基本指标对比 左右并排 ====
-        # 暂时关闭显示（保留代码），需要恢复时把下面的 False 改为 True 即可
-        SHOW_MICRO_AND_INDICATORS = False
-        if SHOW_MICRO_AND_INDICATORS:
-         left, right = st.columns([1, 1])
-         with left:
-            st.subheader("🧩 微型结构对比")
-            if algo_key == "v1.7":
-                mc_opt = build_micro_compare_option(tc, cand, dark=dark)
-                st_echarts(options=mc_opt, height="320px",
-                           theme="dark" if dark else "white",
-                           key=f"micro_cmp_{sel}")
-            else:
+            # ===== 渲染每张候选卡片 =====
+            for orig_i, cand in ranked_filtered:
+                # 锚点（HTML id），用于下拉跳转
                 st.markdown(
-                    build_micro_compare_html_v23(tc, cand, dark=dark),
+                    f"<div id='cand_anchor_{orig_i}' style='position:relative; top:-12px;'></div>",
                     unsafe_allow_html=True,
                 )
 
-         with right:
-            st.subheader("📋 基本指标对比")
-            if algo_key == "v1.7":
-                cmp_df = pd.DataFrame({
-                    "项": ["最大涨幅", "涨幅档", "回撤比", "回撤档",
-                           "D1形态", "D1情绪", "D2形态", "中间涨停",
-                           "断板天数", "距D1天数", "密度", "跌停强度",
-                           "波段", "切面形态"],
-                    "标的": [
-                        f"{tc['max_rise']:.1%}", tc["max_rise_category"],
-                        f"{tc['height_retracement']:.1%}", tc["height_retracement_category"],
-                        tc["break_d1_form"], tc["break_d1_emotion"], tc["break_d2_form"],
-                        tc.get("mid_zt_type", "无涨停"),
-                        f"{tc['break_actual_days']}天", f"{tc['cut_to_d1_days']}天",
-                        tc["density_category"], tc["dt_intensity"],
-                        tc["wave_category"], tc["cut_form"],
-                    ],
-                    "候选": [
-                        f"{cand['max_rise']:.1%}", cand["max_rise_category"],
-                        f"{cand['height_retracement']:.1%}", cand["height_retracement_category"],
-                        cand["break_d1_form"], cand["break_d1_emotion"], cand["break_d2_form"],
-                        cand.get("mid_zt_type", "无涨停"),
-                        f"{cand['break_actual_days']}天", f"{cand['cut_to_d1_days']}天",
-                        cand["density_category"], cand["dt_intensity"],
-                        cand["wave_category"], cand["cut_form"],
-                    ],
-                })
-            else:
-                def _row(case, key, fmt=None):
-                    v = case.get(key)
-                    if v is None:
-                        return "-"
-                    return fmt.format(v) if fmt else str(v)
-                cmp_df = pd.DataFrame({
-                    "项": ["连板高度", "高度档位", "末端形态", "加速次数",
-                           "最大加速持续", "加速持续档位", "加速密度",
-                           "首日振幅", "首日状态", "启动位置", "启动档位",
-                           "综合高度", "综合高度档位", "切面板型",
-                           "封板强度", "振幅档位", "开盘涨幅档位", "量能状态"],
-                    "标的": [
-                        f"{tc.get('board_height', '-')}板", tc.get("height_category", "-"),
-                        tc.get("end_pattern", "-"), str(tc.get("accel_count", "-")),
-                        f"{tc.get('max_accel_duration', '-')}天",
-                        tc.get("max_accel_category", "-"),
-                        _row(tc, "accel_density", "{:.1%}"),
-                        _row(tc, "first_day_amplitude", "{:.2%}"),
-                        tc.get("first_day_state", "-"),
-                        _row(tc, "pre_rally", "{:.2%}"),
-                        tc.get("pre_rally_category", "-"),
-                        _row(tc, "combined_height", "{:.1%}"),
-                        tc.get("combined_height_category", "-"),
-                        tc.get("cut_special", "-"), tc.get("board_strength", "-"),
-                        tc.get("amplitude_category", "-"),
-                        tc.get("open_pct_category", "-"), tc.get("volume_state", "-"),
-                    ],
-                    "候选": [
-                        f"{cand.get('board_height', '-')}板", cand.get("height_category", "-"),
-                        cand.get("end_pattern", "-"), str(cand.get("accel_count", "-")),
-                        f"{cand.get('max_accel_duration', '-')}天",
-                        cand.get("max_accel_category", "-"),
-                        _row(cand, "accel_density", "{:.1%}"),
-                        _row(cand, "first_day_amplitude", "{:.2%}"),
-                        cand.get("first_day_state", "-"),
-                        _row(cand, "pre_rally", "{:.2%}"),
-                        cand.get("pre_rally_category", "-"),
-                        _row(cand, "combined_height", "{:.1%}"),
-                        cand.get("combined_height_category", "-"),
-                        cand.get("cut_special", "-"), cand.get("board_strength", "-"),
-                        cand.get("amplitude_category", "-"),
-                        cand.get("open_pct_category", "-"), cand.get("volume_state", "-"),
-                    ],
-                })
-            st.dataframe(cmp_df, hide_index=True, use_container_width=True, height=520)
+                # 顶部 4 个 metric
+                m1, m2, m3, m4 = st.columns(4)
+                m1.metric("候选代码", cand["stock_code"], cand.get("stock_name", ""))
+                m2.metric("最终得分", f"{cand['final_score']:.2f}",
+                          f"结构 {cand.get('structure_score', 0):.1f}")
+                m3.metric("距离扣分", f"-{cand.get('distance_penalty', 0):.1f}")
+                nx = (f"{cand['next_day_pct']:.2%}"
+                      if cand["next_day_pct"] is not None else "-")
+                m4.metric("次日表现", nx,
+                          "涨停" if cand.get("next_day_is_zt") else "")
 
-        st.subheader("💯 打分瀑布")
-        wf_opt = build_waterfall_option(
-            cand.get("penalty_details", []),
-            final_score=cand["final_score"],
-            dark=dark,
-        )
-        st_echarts(options=wf_opt, height="400px",
-                   theme="dark" if dark else "white",
-                   key=f"wf_{sel}")
-        st.markdown(
-            "<p style='color:var(--text-sub); font-size:13px;'>"
-            "绿色为加分 / 得分基线，红色为扣分。鼠标悬停查看每段数值。"
-            "</p>",
-            unsafe_allow_html=True,
-        )
+                st.write("")
 
-        with st.expander("打分明细原文"):
-            st.code("；".join(cand.get("penalty_details", [])), language="text")
+                # 候选 K 线推导
+                cand_rows = dl.precompute_rows(cand["stock_code"], ad3)
+                cand_cut_idx = next(
+                    (i for i, rr in enumerate(cand_rows)
+                     if pd.Timestamp(rr["date"]) == pd.Timestamp(cand["cut_date"])),
+                    None,
+                )
+                cand_seq_start, cand_segments, cand_bps = None, None, None
+                if cand_cut_idx is not None:
+                    cand_rows2, cand_seq_start, cand_segments, cand_bps = dl.find_segments_and_breaks(
+                        cand["stock_code"],
+                        str(pd.Timestamp(cand["cut_date"]).date()),
+                        ad3,
+                    )
+                    if cand_rows2:
+                        cand_rows = cand_rows2
+                cand_d1, cand_d2 = None, None
+                if cand_bps and cand_cut_idx is not None:
+                    for bp in cand_bps:
+                        if bp[0] <= cand_cut_idx:
+                            cand_d1 = bp[0]
+                            if bp[0] + 1 < len(cand_rows) and bp[0] + 1 <= cand_cut_idx:
+                                cand_d2 = bp[0] + 1
+
+                # 标的 K 线 / 候选 K 线 左右并排
+                kline_left, kline_right = st.columns(2)
+                with kline_left:
+                    st.subheader("🎯 标的 K 线")
+                    tgt_opt = build_kline_option(
+                        tgt_rows, title=tgt_title,
+                        seq_start=tgt_seq_start, cut_idx=tgt_cut_idx,
+                        segments=tgt_segments, break_periods=tgt_bps,
+                        d1_idx=tgt_d1, d2_idx=tgt_d2,
+                        annotate_forms=annotate_forms, dark=dark, k_days=90,
+                    )
+                    st_echarts(options=tgt_opt, height="520px",
+                               theme="dark" if dark else "white",
+                               key=f"detail_target_kline_{orig_i}")
+                with kline_right:
+                    st.subheader("📈 候选 K 线")
+                    opt = build_kline_option(
+                        cand_rows,
+                        title=f"{cand['stock_code']} {cand.get('stock_name','')} "
+                              f"切面={str(cand['cut_date'])[:10]}",
+                        seq_start=cand_seq_start, cut_idx=cand_cut_idx,
+                        segments=cand_segments, break_periods=cand_bps,
+                        d1_idx=cand_d1, d2_idx=cand_d2,
+                        annotate_forms=annotate_forms, dark=dark, k_days=90,
+                    )
+                    st_echarts(options=opt, height="520px",
+                               theme="dark" if dark else "white",
+                               key=f"detail_cand_kline_{orig_i}")
+
+                st.write("")
+
+                # 微型结构 / 基本指标对比（保留代码，默认隐藏）
+                SHOW_MICRO_AND_INDICATORS = False
+                if SHOW_MICRO_AND_INDICATORS:
+                    left, right = st.columns([1, 1])
+                    with left:
+                        st.subheader("🧩 微型结构对比")
+                        if algo_key == "v1.7":
+                            mc_opt = build_micro_compare_option(tc, cand, dark=dark)
+                            st_echarts(options=mc_opt, height="320px",
+                                       theme="dark" if dark else "white",
+                                       key=f"micro_cmp_{orig_i}")
+                        else:
+                            st.markdown(
+                                build_micro_compare_html_v23(tc, cand, dark=dark),
+                                unsafe_allow_html=True,
+                            )
+                    with right:
+                        st.subheader("📋 基本指标对比")
+                        if algo_key == "v1.7":
+                            cmp_df = pd.DataFrame({
+                                "项": ["最大涨幅", "涨幅档", "回撤比", "回撤档",
+                                       "D1形态", "D1情绪", "D2形态", "中间涨停",
+                                       "断板天数", "距D1天数", "密度", "跌停强度",
+                                       "波段", "切面形态"],
+                                "标的": [
+                                    f"{tc['max_rise']:.1%}", tc["max_rise_category"],
+                                    f"{tc['height_retracement']:.1%}", tc["height_retracement_category"],
+                                    tc["break_d1_form"], tc["break_d1_emotion"], tc["break_d2_form"],
+                                    tc.get("mid_zt_type", "无涨停"),
+                                    f"{tc['break_actual_days']}天", f"{tc['cut_to_d1_days']}天",
+                                    tc["density_category"], tc["dt_intensity"],
+                                    tc["wave_category"], tc["cut_form"],
+                                ],
+                                "候选": [
+                                    f"{cand['max_rise']:.1%}", cand["max_rise_category"],
+                                    f"{cand['height_retracement']:.1%}", cand["height_retracement_category"],
+                                    cand["break_d1_form"], cand["break_d1_emotion"], cand["break_d2_form"],
+                                    cand.get("mid_zt_type", "无涨停"),
+                                    f"{cand['break_actual_days']}天", f"{cand['cut_to_d1_days']}天",
+                                    cand["density_category"], cand["dt_intensity"],
+                                    cand["wave_category"], cand["cut_form"],
+                                ],
+                            })
+                        else:
+                            def _row(case, key, fmt=None):
+                                v = case.get(key)
+                                if v is None:
+                                    return "-"
+                                return fmt.format(v) if fmt else str(v)
+                            cmp_df = pd.DataFrame({
+                                "项": ["连板高度", "高度档位", "末端形态", "加速次数",
+                                       "最大加速持续", "加速持续档位", "加速密度",
+                                       "首日振幅", "首日状态", "启动位置", "启动档位",
+                                       "综合高度", "综合高度档位", "切面板型",
+                                       "封板强度", "振幅档位", "开盘涨幅档位", "量能状态"],
+                                "标的": [
+                                    f"{tc.get('board_height', '-')}板", tc.get("height_category", "-"),
+                                    tc.get("end_pattern", "-"), str(tc.get("accel_count", "-")),
+                                    f"{tc.get('max_accel_duration', '-')}天",
+                                    tc.get("max_accel_category", "-"),
+                                    _row(tc, "accel_density", "{:.1%}"),
+                                    _row(tc, "first_day_amplitude", "{:.2%}"),
+                                    tc.get("first_day_state", "-"),
+                                    _row(tc, "pre_rally", "{:.2%}"),
+                                    tc.get("pre_rally_category", "-"),
+                                    _row(tc, "combined_height", "{:.1%}"),
+                                    tc.get("combined_height_category", "-"),
+                                    tc.get("cut_special", "-"), tc.get("board_strength", "-"),
+                                    tc.get("amplitude_category", "-"),
+                                    tc.get("open_pct_category", "-"), tc.get("volume_state", "-"),
+                                ],
+                                "候选": [
+                                    f"{cand.get('board_height', '-')}板", cand.get("height_category", "-"),
+                                    cand.get("end_pattern", "-"), str(cand.get("accel_count", "-")),
+                                    f"{cand.get('max_accel_duration', '-')}天",
+                                    cand.get("max_accel_category", "-"),
+                                    _row(cand, "accel_density", "{:.1%}"),
+                                    _row(cand, "first_day_amplitude", "{:.2%}"),
+                                    cand.get("first_day_state", "-"),
+                                    _row(cand, "pre_rally", "{:.2%}"),
+                                    cand.get("pre_rally_category", "-"),
+                                    _row(cand, "combined_height", "{:.1%}"),
+                                    cand.get("combined_height_category", "-"),
+                                    cand.get("cut_special", "-"), cand.get("board_strength", "-"),
+                                    cand.get("amplitude_category", "-"),
+                                    cand.get("open_pct_category", "-"), cand.get("volume_state", "-"),
+                                ],
+                            })
+                        st.dataframe(cmp_df, hide_index=True,
+                                     use_container_width=True, height=520)
+
+                # 打分瀑布（默认折叠）
+                with st.expander("💯 打分瀑布", expanded=False):
+                    wf_opt = build_waterfall_option(
+                        cand.get("penalty_details", []),
+                        final_score=cand["final_score"],
+                        dark=dark,
+                    )
+                    st_echarts(options=wf_opt, height="400px",
+                               theme="dark" if dark else "white",
+                               key=f"wf_{orig_i}")
+                    st.markdown(
+                        "<p style='color:var(--text-sub); font-size:13px;'>"
+                        "绿色为加分 / 得分基线，红色为扣分。鼠标悬停查看每段数值。"
+                        "</p>",
+                        unsafe_allow_html=True,
+                    )
+
+                # 打分明细原文（默认折叠）
+                with st.expander("📝 打分明细原文", expanded=False):
+                    st.code("；".join(cand.get("penalty_details", [])), language="text")
+
+                # 卡片之间的分隔线
+                st.markdown(
+                    "<hr style='border:none; border-top:1px solid var(--border); "
+                    "margin:28px 0 28px 0;' />",
+                    unsafe_allow_html=True,
+                )
