@@ -21,7 +21,7 @@ warnings.filterwarnings('ignore')
 # ============================================================
 
 CONFIG = {
-    'cache_dir': './stock_cache/',
+    'cache_dir': '../stock_cache/',
     'zt_threshold': 0.098,
     'dt_threshold': -0.098,
     'volume_lookback': 3,
@@ -185,19 +185,9 @@ CONFIG = {
     'distance_multiplier': 10,
     'distance_top_n': 30,
 
-    'case_library_cache': './stock_cache/case_library_break_v20.pkl',
+    'case_library_cache': '../stock_cache/case_library_break_v20.pkl',
     'worker_count': max(1, cpu_count() - 1),
 }
-
-# 启动时把 CONFIG 里的相对路径转成绝对路径（基准 = 本文件所在目录），
-# 避免被 Streamlit / 任意 CWD 启动时缓存路径错位、找不到 → 重下/重建死循环。
-_HERE_DIR = os.path.dirname(os.path.abspath(__file__))
-if not os.path.isabs(CONFIG['cache_dir']):
-    CONFIG['cache_dir'] = os.path.normpath(os.path.join(_HERE_DIR, CONFIG['cache_dir']))
-if CONFIG.get('case_library_cache') and not os.path.isabs(CONFIG['case_library_cache']):
-    CONFIG['case_library_cache'] = os.path.normpath(
-        os.path.join(_HERE_DIR, CONFIG['case_library_cache'])
-    )
 
 os.makedirs(CONFIG['cache_dir'], exist_ok=True)
 

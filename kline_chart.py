@@ -25,6 +25,8 @@ BREAK_AREA_COLOR = "rgba(239,68,68,0.18)"
 D1_LINE_COLOR = "#f59e0b"
 D2_LINE_COLOR = "#a78bfa"
 CUT_LINE_COLOR = "#fbbf24"
+MCUT_AREA_COLOR = "rgba(251,191,36,0.20)"
+MSTART_AREA_COLOR = "rgba(96,165,250,0.18)"
 
 
 def _fmt_date(d) -> str:
@@ -78,6 +80,9 @@ def build_kline_option(
     dark: bool = True,
     k_days: int = 60,
     chart_height: int = 560,
+    mcut_daily: list[dict] | None = None,
+    mstart_daily: list[dict] | None = None,
+    start_idx: int | None = None,
 ) -> dict:
     """构造 ECharts option dict。
 
@@ -195,6 +200,72 @@ def build_kline_option(
                           "formatter": f},
             })
 
+    # ===== M-cut / M-start 3 天窗口标注 =====
+    mcut_points = []
+    if mcut_daily and cut_s is not None:
+        # 锚点 = 切面日；窗口 = [cut-2, cut-1, cut]
+        anchor_view = cut_s
+        mcut_start_view = max(0, anchor_view - 2)
+        mcut_end_view = anchor_view
+        if mcut_end_view <= len(categories) - 1 and mcut_start_view <= mcut_end_view:
+            mark_areas.append([
+                {"xAxis": categories[mcut_start_view],
+                 "itemStyle": {"color": MCUT_AREA_COLOR,
+                               "borderColor": "rgba(251,191,36,0.55)",
+                               "borderWidth": 1},
+                 "name": "M-cut"},
+                {"xAxis": categories[mcut_end_view]},
+            ])
+        # 三日徽章（按 day_offset 倒数：2=最早，0=切面）
+        for day in mcut_daily:
+            off = day.get("day_offset", 0)
+            view_idx = anchor_view - off
+            if view_idx < 0 or view_idx >= len(categories):
+                continue
+            sub_text_form = day.get("form") or ""
+            sub_text_sub = day.get("subdivision") or ""
+            sub_text_emo = day.get("emotion") or ""
+            ds = day.get("day_score", 0)
+            sign = "+" if ds >= 0 else ""
+            color = day.get("color", "#94a3b8")
+            label_text = f"M-cut {day.get('label','')}\n{sub_text_sub}\n{sub_text_emo}  {sign}{ds}"
+            mcut_points.append({
+                "name": f"mcut_{off}",
+                "coord": [categories[view_idx], sub[view_idx]["high"]],
+                "value": label_text,
+                "symbol": "rect",
+                "symbolSize": [1, 1],
+                "symbolOffset": [0, -78 - off * 4],
+                "itemStyle": {"color": "transparent", "borderColor": "transparent"},
+                "label": {
+                    "show": True,
+                    "formatter": label_text,
+                    "color": "#ffffff",
+                    "fontSize": 10,
+                    "fontWeight": "bold",
+                    "lineHeight": 13,
+                    "backgroundColor": "rgba(15,23,42,0.92)",
+                    "borderColor": color,
+                    "borderWidth": 1.5,
+                    "borderRadius": 4,
+                    "padding": [3, 6],
+                },
+            })
+
+    if mstart_daily and start_idx is not None:
+        anchor_view = _shift(start_idx)
+        if anchor_view is not None:
+            mstart_start_view = max(0, anchor_view - 2)
+            if mstart_start_view <= anchor_view:
+                mark_areas.append([
+                    {"xAxis": categories[mstart_start_view],
+                     "itemStyle": {"color": MSTART_AREA_COLOR,
+                                   "borderColor": "rgba(96,165,250,0.55)",
+                                   "borderWidth": 1},
+                     "name": "M-start"},
+                    {"xAxis": categories[anchor_view]},
+                ])
+
     option = {
         "title": {
             "text": title,
@@ -299,8 +370,8 @@ def build_kline_option(
                 "markLine": {"symbol": ["none", "none"], "data": mark_lines, "silent": True}
                 if mark_lines else None,
                 "markPoint": (
-                    {"data": cut_points + form_points, "silent": True}
-                    if (cut_points or form_points) else None
+                    {"data": cut_points + form_points + mcut_points, "silent": True}
+                    if (cut_points or form_points or mcut_points) else None
                 ),
             },
             {"name": "MA5", "type": "line", "data": _calc_ma(5, values),

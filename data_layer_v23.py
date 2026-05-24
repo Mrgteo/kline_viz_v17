@@ -40,18 +40,98 @@ def _load_app_module():
 APP = _load_app_module()
 CONFIG = APP.CONFIG
 
+# Streamlit 启动 CWD 未必是项目目录，必须把相对路径转成绝对路径，
+# 否则 ./stock_cache/case_library_v23c.pkl 与 daily_{code}_*.pkl 都找不到
+# → 触发全量重建 + 全量从 akshare 重下，前端「执行匹配」转圈不返回。
+def _abs(p: str) -> str:
+    if not p:
+        return p
+    return p if os.path.isabs(p) else str((_APP_PATH.parent / p).resolve())
+
+CONFIG["cache_dir"] = _abs(CONFIG.get("cache_dir", "./stock_cache/"))
+if CONFIG.get("case_library_cache"):
+    CONFIG["case_library_cache"] = _abs(CONFIG["case_library_cache"])
+os.makedirs(CONFIG["cache_dir"], exist_ok=True)
+
+
+# v2.0 算法已把所有日 K 缓存迁移成 daily_{code}.pkl 命名；
+# 而 app1.py 原版只认 daily_{code}_{start}_{end}.pkl 命名，
+# 找不到就会逐只去 akshare 重新下载 → 卡住数小时。
+# 这里给 APP.get_daily_data 打补丁：优先读新命名，回退旧命名。
+import pickle as _pickle
+
+_ORIG_GET_DAILY = APP.get_daily_data
+
+
+def _patched_get_daily_data(stock_code, start_date, end_date, max_retries=3):
+    cache_dir = CONFIG["cache_dir"]
+    new_cache = os.path.join(cache_dir, f"daily_{stock_code}.pkl")
+    if os.path.exists(new_cache):
+        try:
+            with open(new_cache, "rb") as f:
+                df = _pickle.load(f)
+            # 区间裁剪以贴近原 API 行为
+            start_ts = pd.to_datetime(start_date)
+            end_ts = pd.to_datetime(end_date)
+            df = df[(df["date"] >= start_ts) & (df["date"] <= end_ts)].reset_index(drop=True)
+            if len(df) > 0:
+                return df
+        except Exception:
+            pass
+    return _ORIG_GET_DAILY(stock_code, start_date, end_date, max_retries=max_retries)
+
+
+APP.get_daily_data = _patched_get_daily_data
+
+
+# 同步替换 batch_download_daily_data：原版的 is_cached 只看旧命名，导致
+# 即便命中 daily_{code}.pkl 也会逐只 sleep request_interval（0.3s），
+# 2899 只累计 ~14 分钟空 sleep。这里直接以新命名为准。
+def _patched_batch_download(stock_list, start_date, end_date):
+    import time as _time
+    cache_dir = CONFIG["cache_dir"]
+    all_data: dict = {}
+    total = len(stock_list)
+    success = failed = from_cache = 0
+    print(f"开始加载日K数据，共 {total} 只股票...")
+    start_time = _time.time()
+    for i, row in stock_list.iterrows():
+        code = row["code"]
+        new_cache = os.path.join(cache_dir, f"daily_{code}.pkl")
+        old_cache = os.path.join(cache_dir, f"daily_{code}_{start_date}_{end_date}.pkl")
+        is_cached = os.path.exists(new_cache) or os.path.exists(old_cache)
+        df = APP.get_daily_data(code, start_date, end_date, max_retries=CONFIG["max_retries"])
+        if df is not None and len(df) > 0:
+            all_data[code] = df
+            success += 1
+            if is_cached:
+                from_cache += 1
+        else:
+            failed += 1
+        if (i + 1) % 200 == 0 or (i + 1) == total:
+            elapsed = _time.time() - start_time
+            print(f"  进度：{i+1}/{total} ({(i+1)/total*100:.1f}%) | "
+                  f"成功{success}(缓存{from_cache}) | 失败{failed} | {elapsed:.1f}秒")
+        if not is_cached:
+            _time.sleep(CONFIG["request_interval"])
+    print(f"\n加载完成，成功{success}（缓存{from_cache}）/ 失败{failed}")
+    return all_data
+
+
+APP.batch_download_daily_data = _patched_batch_download
+
 
 # ============== 缓存扫描 ==============
 def list_cached_stocks(start_date: str, end_date: str) -> list[str]:
-    cache_dir = CONFIG.get("cache_dir", "./stock_cache/")
-    if not os.path.isabs(cache_dir):
-        cache_dir = str((_APP_PATH.parent / cache_dir).resolve())
+    cache_dir = CONFIG["cache_dir"]
     if not os.path.isdir(cache_dir):
         return []
-    pat = re.compile(rf"^daily_(\d{{6}})_{re.escape(start_date)}_{re.escape(end_date)}\.pkl$")
+    # 兼容新旧两种命名
+    pat_new = re.compile(r"^daily_(\d{6})\.pkl$")
+    pat_old = re.compile(rf"^daily_(\d{{6}})_{re.escape(start_date)}_{re.escape(end_date)}\.pkl$")
     codes = []
     for fn in os.listdir(cache_dir):
-        m = pat.match(fn)
+        m = pat_new.match(fn) or pat_old.match(fn)
         if m:
             codes.append(m.group(1))
     return sorted(set(codes))
@@ -63,7 +143,31 @@ def load_stock_list():
 
 
 def load_daily_data(stock_list, start_date: str, end_date: str) -> dict[str, pd.DataFrame]:
-    return APP.batch_download_daily_data(stock_list, start_date, end_date)
+    """纯缓存快路：直接读 daily_{code}.pkl 切片返回，绝不触发 akshare 增量下载。
+    完整刷新由侧边栏「下载数据」按钮 → download_daily_data_with_progress 负责。
+    """
+    cache_dir = CONFIG["cache_dir"]
+    start_ts = pd.to_datetime(start_date, format="%Y%m%d") if "-" not in start_date else pd.to_datetime(start_date)
+    end_ts = pd.to_datetime(end_date, format="%Y%m%d") if "-" not in end_date else pd.to_datetime(end_date)
+    out: dict[str, pd.DataFrame] = {}
+    for _, row in stock_list.iterrows():
+        code = row["code"]
+        fp = os.path.join(cache_dir, f"daily_{code}.pkl")
+        if not os.path.exists(fp):
+            continue
+        try:
+            with open(fp, "rb") as f:
+                df = _pickle.load(f)
+            if df is None or len(df) == 0:
+                continue
+            df["date"] = pd.to_datetime(df["date"])
+            mask = (df["date"] >= start_ts) & (df["date"] <= end_ts)
+            sliced = df[mask].reset_index(drop=True)
+            if len(sliced) > 0:
+                out[code] = sliced
+        except Exception:
+            continue
+    return out
 
 
 def download_daily_data_with_progress(stock_list, start_date: str, end_date: str,
@@ -73,11 +177,12 @@ def download_daily_data_with_progress(stock_list, start_date: str, end_date: str
     all_data = {}
     total = len(stock_list)
     success = failed = from_cache = 0
-    cache_dir = CONFIG.get("cache_dir", "./stock_cache/")
+    cache_dir = CONFIG["cache_dir"]
     for i, row in stock_list.iterrows():
         code = row["code"]
-        cf = os.path.join(cache_dir, f"daily_{code}_{start_date}_{end_date}.pkl")
-        cached = os.path.exists(cf)
+        cf_new = os.path.join(cache_dir, f"daily_{code}.pkl")
+        cf_old = os.path.join(cache_dir, f"daily_{code}_{start_date}_{end_date}.pkl")
+        cached = os.path.exists(cf_new) or os.path.exists(cf_old)
         df = APP.get_daily_data(code, start_date, end_date,
                                 max_retries=CONFIG["max_retries"])
         status = "fail"

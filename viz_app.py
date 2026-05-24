@@ -1,5 +1,5 @@
 """
-K线相似度匹配系统 v1.7 - Streamlit 可视化前端
+K线相似度匹配系统 v2.0 - Streamlit 可视化前端
 参考 ArvinLovegood/go-stock 的 K 线样式。
 
 运行：
@@ -30,7 +30,7 @@ def _get_dl(algo_key: str):
 dl = _dl_v17
 
 st.set_page_config(
-    page_title="K线相似度匹配 v1.7",
+    page_title="K线相似度匹配 v2.0",
     page_icon="📈",
     layout="wide",
 )
@@ -532,7 +532,7 @@ def cached_daily_data(start_date: str, end_date: str, algo_key: str = "v1.7"):
     return ad, si
 
 
-@st.cache_resource(show_spinner="加载/构建案例库...")
+@st.cache_resource(show_spinner="加载/构建案例库（首次需数分钟，建议先在终端跑 prebuild_case_library.py）...")
 def cached_case_library(start_date: str, end_date: str, algo_key: str = "v1.7"):
     _dl = _get_dl(algo_key)
     ad, si = cached_daily_data(start_date, end_date, algo_key)
@@ -555,12 +555,12 @@ with st.sidebar:
 
     algo_choice = st.radio(
         "算法版本",
-        ["v1.7 (断板版)", "v2.3 (连板版)"],
+        ["v2.0 (断板版)", "v2.3 (连板版)"],
         horizontal=True,
         index=0,
         key="algo_choice",
     )
-    algo_key = "v1.7" if algo_choice.startswith("v1.7") else "v2.3"
+    algo_key = "v1.7" if algo_choice.startswith("v2.0") else "v2.3"
     dl = _get_dl(algo_key)
 
     stock_code = st.text_input("标的股票代码", value="002342")
@@ -656,7 +656,8 @@ c1, c2, c3, c4, c5 = st.columns(5)
 c1.metric("标的", f"{tc['stock_code']}", tc.get("stock_name", ""))
 c2.metric("切面日", str(tc["cut_date"])[:10])
 if algo_key == "v1.7":
-    c3.metric("距D1", f"{tc['cut_to_d1_days']} 天", tc["cut_to_d1_category"])
+    c3.metric("距D1", f"{tc['cut_to_d1_days']} 天",
+              tc.get("d1_distance_cat", tc.get("cut_to_d1_category", "")))
     c4.metric("最大涨幅", f"{tc['max_rise']:.1%}", tc["max_rise_category"])
 else:
     c3.metric("连板高度", f"{tc['board_height']} 板", tc.get("height_category", ""))
@@ -822,6 +823,14 @@ elif view == "detail":
                     unsafe_allow_html=True,
                 )
 
+                # M-cut 对比 payload（v1.7 才有 m_cut；v2.3 没有则回退 None）
+                mcut_payload = None
+                if algo_key == "v1.7" and tc.get("m_cut") and cand.get("m_cut"):
+                    try:
+                        mcut_payload = dl.get_mcut_compare_payload(tc, cand)
+                    except Exception:
+                        mcut_payload = None
+
                 # 顶部 4 个 metric
                 m1, m2, m3, m4 = st.columns(4)
                 m1.metric("候选代码", cand["stock_code"], cand.get("stock_name", ""))
@@ -859,6 +868,54 @@ elif view == "detail":
                             if bp[0] + 1 < len(cand_rows) and bp[0] + 1 <= cand_cut_idx:
                                 cand_d2 = bp[0] + 1
 
+                # ===== M-cut 3 天微型结构对比横条 =====
+                if mcut_payload and mcut_payload["target"]:
+                    _color_label = {
+                        "match": ("精确匹配", "#10b981"),
+                        "approx": ("近似", "#3b82f6"),
+                        "emotion": ("情绪同", "#a78bfa"),
+                        "mismatch": ("不匹配", "#ef4444"),
+                        "missing": ("一方无", "#fb923c"),
+                        "none": ("双方无", "#94a3b8"),
+                    }
+                    cells = []
+                    for td, cd in zip(mcut_payload["target"], mcut_payload["cand"]):
+                        kind = td.get("diff_kind", "mismatch")
+                        name, color = _color_label.get(kind, ("?", "#94a3b8"))
+                        ds = td.get("day_score", 0)
+                        sign = "+" if ds >= 0 else ""
+                        cells.append(
+                            f"<div style='flex:1; min-width:0; border:1.5px solid {color}; "
+                            f"border-radius:8px; padding:8px 10px; "
+                            f"background:rgba(15,23,42,0.45);'>"
+                            f"<div style='font-size:11px;color:#94a3b8;'>M-cut · {td['label']}</div>"
+                            f"<div style='font-size:13px;color:#f1f5f9;font-weight:600;margin-top:2px;'>"
+                            f"标 {td.get('subdivision','-')}</div>"
+                            f"<div style='font-size:13px;color:#cbd5e1;'>候 {cd.get('subdivision','-')}</div>"
+                            f"<div style='font-size:11px;color:{color};margin-top:4px;font-weight:700;'>"
+                            f"{name} {sign}{ds}</div>"
+                            f"</div>"
+                        )
+                    total_b = mcut_payload.get("total_bonus", 0)
+                    total_p = mcut_payload.get("total_penalty", 0)
+                    net = total_b - total_p
+                    net_color = "#10b981" if net >= 0 else "#ef4444"
+                    st.markdown(
+                        f"<div style='display:flex; gap:10px; align-items:stretch; "
+                        f"margin-bottom:10px;'>"
+                        f"<div style='flex:0 0 110px; display:flex; flex-direction:column; "
+                        f"justify-content:center; border:1.5px solid {net_color}; "
+                        f"border-radius:8px; padding:8px 10px; background:rgba(15,23,42,0.45);'>"
+                        f"<div style='font-size:11px;color:#94a3b8;'>M-cut 净分</div>"
+                        f"<div style='font-size:20px;color:{net_color};font-weight:800;'>"
+                        f"{'+' if net>=0 else ''}{net}</div>"
+                        f"<div style='font-size:10px;color:#64748b;'>+{total_b} / -{total_p}</div>"
+                        f"</div>"
+                        f"{''.join(cells)}"
+                        f"</div>",
+                        unsafe_allow_html=True,
+                    )
+
                 # 标的 K 线 / 候选 K 线 左右并排
                 kline_left, kline_right = st.columns(2)
                 with kline_left:
@@ -869,6 +926,7 @@ elif view == "detail":
                         segments=tgt_segments, break_periods=tgt_bps,
                         d1_idx=tgt_d1, d2_idx=tgt_d2,
                         annotate_forms=annotate_forms, dark=dark, k_days=90,
+                        mcut_daily=(mcut_payload["target"] if mcut_payload else None),
                     )
                     st_echarts(options=tgt_opt, height="520px",
                                theme="dark" if dark else "white",
@@ -883,6 +941,7 @@ elif view == "detail":
                         segments=cand_segments, break_periods=cand_bps,
                         d1_idx=cand_d1, d2_idx=cand_d2,
                         annotate_forms=annotate_forms, dark=dark, k_days=90,
+                        mcut_daily=(mcut_payload["cand"] if mcut_payload else None),
                     )
                     st_echarts(options=opt, height="520px",
                                theme="dark" if dark else "white",

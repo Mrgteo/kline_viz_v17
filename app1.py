@@ -87,6 +87,16 @@ CONFIG = {
     'distance_top_n': 30,
 }
 
+# 启动时把 CONFIG 里的相对路径转成绝对路径（基准 = 本文件所在目录），
+# 避免被 Streamlit / 任意 CWD 启动时缓存路径错位、找不到 → 重下/重建死循环。
+_HERE_DIR = os.path.dirname(os.path.abspath(__file__))
+if not os.path.isabs(CONFIG['cache_dir']):
+    CONFIG['cache_dir'] = os.path.normpath(os.path.join(_HERE_DIR, CONFIG['cache_dir']))
+if CONFIG.get('case_library_cache') and not os.path.isabs(CONFIG['case_library_cache']):
+    CONFIG['case_library_cache'] = os.path.normpath(
+        os.path.join(_HERE_DIR, CONFIG['case_library_cache'])
+    )
+
 os.makedirs(CONFIG['cache_dir'], exist_ok=True)
 
 SPECIAL_TYPES = ['一字板', 'T字板', '地天板', '大长腿', '秒板']
@@ -112,6 +122,19 @@ def code_to_tencent_symbol(code):
 
 
 def get_daily_data(stock_code, start_date, end_date, max_retries=3):
+    # 优先读 v2.0 新命名（与 app.py 共享一份缓存），避免重复下载
+    new_cache = os.path.join(CONFIG['cache_dir'], f"daily_{stock_code}.pkl")
+    if os.path.exists(new_cache):
+        try:
+            with open(new_cache, 'rb') as f:
+                df = pickle.load(f)
+            start_ts = pd.to_datetime(start_date)
+            end_ts = pd.to_datetime(end_date)
+            df = df[(df['date'] >= start_ts) & (df['date'] <= end_ts)].reset_index(drop=True)
+            if len(df) > 0:
+                return df
+        except Exception:
+            pass
     cache_file = os.path.join(CONFIG['cache_dir'],
                               f"daily_{stock_code}_{start_date}_{end_date}.pkl")
     if os.path.exists(cache_file):
@@ -147,9 +170,10 @@ def batch_download_daily_data(stock_list, start_date, end_date):
     start_time = time.time()
     for i, row in stock_list.iterrows():
         code = row['code']
-        cache_file = os.path.join(CONFIG['cache_dir'],
-                                  f"daily_{code}_{start_date}_{end_date}.pkl")
-        is_cached = os.path.exists(cache_file)
+        new_cache = os.path.join(CONFIG['cache_dir'], f"daily_{code}.pkl")
+        old_cache = os.path.join(CONFIG['cache_dir'],
+                                 f"daily_{code}_{start_date}_{end_date}.pkl")
+        is_cached = os.path.exists(new_cache) or os.path.exists(old_cache)
         df = get_daily_data(code, start_date, end_date, max_retries=CONFIG['max_retries'])
         if df is not None and len(df) > 0:
             all_data[code] = df
