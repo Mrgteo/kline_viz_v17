@@ -27,6 +27,8 @@ D2_LINE_COLOR = "#a78bfa"
 CUT_LINE_COLOR = "#fbbf24"
 MCUT_AREA_COLOR = "rgba(251,191,36,0.20)"
 MSTART_AREA_COLOR = "rgba(96,165,250,0.18)"
+RESEARCH_AREA_COLOR = "rgba(255,255,255,0.02)"
+RESEARCH_AREA_BORDER = "rgba(255,255,255,0.78)"
 
 
 def _fmt_date(d) -> str:
@@ -83,6 +85,7 @@ def build_kline_option(
     mcut_daily: list[dict] | None = None,
     mstart_daily: list[dict] | None = None,
     start_idx: int | None = None,
+    show_research_range: bool = True,
 ) -> dict:
     """构造 ECharts option dict。
 
@@ -130,8 +133,28 @@ def build_kline_option(
     d1_s = _shift(d1_idx)
     d2_s = _shift(d2_idx)
     cut_s = _shift(cut_idx)
+    research_start_idx = seq_start if show_research_range else None
+    if show_research_range and research_start_idx is None and cut_idx is not None and segments:
+        for s, e in segments:
+            if s <= cut_idx <= e:
+                research_start_idx = s
+                break
+        if research_start_idx is None:
+            prior_segments = [(s, e) for s, e in segments if s <= cut_idx]
+            if prior_segments:
+                research_start_idx = prior_segments[-1][0]
+    research_start_s = _shift(research_start_idx)
 
     mark_areas = []
+    if research_start_s is not None and cut_s is not None and research_start_s <= cut_s:
+        mark_areas.append([
+            {"xAxis": categories[research_start_s],
+             "itemStyle": {"color": RESEARCH_AREA_COLOR,
+                           "borderColor": RESEARCH_AREA_BORDER,
+                           "borderWidth": 1},
+             "label": {"show": False}},
+            {"xAxis": categories[cut_s]},
+        ])
     for ss, ee in seg_shift:
         mark_areas.append([
             {"xAxis": categories[ss],
@@ -329,12 +352,14 @@ def build_kline_option(
             {
                 "name": "日K",
                 "type": "candlestick",
+                "z": 3,
                 "data": values,
                 "itemStyle": {
                     "color": UP_COLOR, "color0": DOWN_COLOR,
                     "borderColor": UP_COLOR, "borderColor0": DOWN_COLOR,
                 },
-                "markArea": {"silent": True, "data": mark_areas} if mark_areas else None,
+                "markArea": {"silent": True, "z": -1, "data": mark_areas}
+                if mark_areas else None,
                 "markLine": {"symbol": ["none", "none"], "data": mark_lines, "silent": True}
                 if mark_lines else None,
                 "markPoint": (
@@ -372,6 +397,8 @@ def build_kline_option(
 
     # ===== 固定色块图例（替代 markArea 顶部的文字标签）=====
     legend_items: list[tuple[str, str, str]] = []  # (label, fill, border)
+    if research_start_s is not None and cut_s is not None and research_start_s <= cut_s:
+        legend_items.append(("研究范围", RESEARCH_AREA_COLOR, RESEARCH_AREA_BORDER))
     if seg_shift:
         legend_items.append(("涨停段", SEG_AREA_COLOR, "rgba(239,68,68,0.55)"))
     if bp_shift:

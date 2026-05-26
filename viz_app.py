@@ -29,6 +29,8 @@ def _get_dl(algo_key: str):
 # 默认指向 v1.7，模块顶部静态引用保持兼容
 dl = _dl_v17
 
+SHOW_SCORE_DEBUG_SECTIONS = False
+
 st.set_page_config(
     page_title="K线相似度匹配 v2.0",
     page_icon="📈",
@@ -711,6 +713,7 @@ if view == "main":
         segments=segments, break_periods=break_periods,
         d1_idx=d1_idx, d2_idx=d2_idx,
         annotate_forms=annotate_forms, dark=dark, k_days=90,
+        show_research_range=False,
     )
     st_echarts(options=option, height="640px", theme="dark" if dark else "white")
 
@@ -812,8 +815,7 @@ elif view == "detail":
                         tgt_d1 = bp[0]
                         if bp[0] + 1 < len(tgt_rows) and bp[0] + 1 <= tgt_cut_idx:
                             tgt_d2 = bp[0] + 1
-            tgt_title = (f"{tc['stock_code']} {tc.get('stock_name','')} "
-                         f"切面={str(tc['cut_date'])[:10]}")
+            tgt_title = f"{tc['stock_code']} {tc.get('stock_name','')}"
 
             # ===== 渲染每张候选卡片 =====
             for orig_i, cand in ranked_filtered:
@@ -927,6 +929,7 @@ elif view == "detail":
                         d1_idx=tgt_d1, d2_idx=tgt_d2,
                         annotate_forms=annotate_forms, dark=dark, k_days=90,
                         mcut_daily=(mcut_payload["target"] if mcut_payload else None),
+                        show_research_range=True,
                     )
                     st_echarts(options=tgt_opt, height="520px",
                                theme="dark" if dark else "white",
@@ -935,13 +938,13 @@ elif view == "detail":
                     st.subheader("📈 候选 K 线")
                     opt = build_kline_option(
                         cand_rows,
-                        title=f"{cand['stock_code']} {cand.get('stock_name','')} "
-                              f"切面={str(cand['cut_date'])[:10]}",
+                        title=f"{cand['stock_code']} {cand.get('stock_name','')}",
                         seq_start=cand_seq_start, cut_idx=cand_cut_idx,
                         segments=cand_segments, break_periods=cand_bps,
                         d1_idx=cand_d1, d2_idx=cand_d2,
                         annotate_forms=annotate_forms, dark=dark, k_days=90,
                         mcut_daily=(mcut_payload["cand"] if mcut_payload else None),
+                        show_research_range=True,
                     )
                     st_echarts(options=opt, height="520px",
                                theme="dark" if dark else "white",
@@ -1040,26 +1043,27 @@ elif view == "detail":
                         st.dataframe(cmp_df, hide_index=True,
                                      use_container_width=True, height=520)
 
-                # 打分瀑布（默认折叠）
-                with st.expander("💯 打分瀑布", expanded=False):
-                    wf_opt = build_waterfall_option(
-                        cand.get("penalty_details", []),
-                        final_score=cand["final_score"],
-                        dark=dark,
-                    )
-                    st_echarts(options=wf_opt, height="400px",
-                               theme="dark" if dark else "white",
-                               key=f"wf_{orig_i}")
-                    st.markdown(
-                        "<p style='color:var(--text-sub); font-size:13px;'>"
-                        "绿色为加分 / 得分基线，红色为扣分。鼠标悬停查看每段数值。"
-                        "</p>",
-                        unsafe_allow_html=True,
-                    )
+                if SHOW_SCORE_DEBUG_SECTIONS:
+                    # 打分瀑布（默认折叠）
+                    with st.expander("💯 打分瀑布", expanded=False):
+                        wf_opt = build_waterfall_option(
+                            cand.get("penalty_details", []),
+                            final_score=cand["final_score"],
+                            dark=dark,
+                        )
+                        st_echarts(options=wf_opt, height="400px",
+                                   theme="dark" if dark else "white",
+                                   key=f"wf_{orig_i}")
+                        st.markdown(
+                            "<p style='color:var(--text-sub); font-size:13px;'>"
+                            "绿色为加分 / 得分基线，红色为扣分。鼠标悬停查看每段数值。"
+                            "</p>",
+                            unsafe_allow_html=True,
+                        )
 
-                # 打分明细原文（默认折叠）
-                with st.expander("📝 打分明细原文", expanded=False):
-                    st.code("；".join(cand.get("penalty_details", [])), language="text")
+                    # 打分明细原文（默认折叠）
+                    with st.expander("📝 打分明细原文", expanded=False):
+                        st.code("；".join(cand.get("penalty_details", [])), language="text")
 
                 # 卡片之间的分隔线
                 st.markdown(
