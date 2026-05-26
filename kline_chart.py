@@ -20,8 +20,8 @@ import pandas as pd
 
 UP_COLOR = "#ec0000"
 DOWN_COLOR = "#00da3c"
-SEG_AREA_COLOR = "rgba(16,185,129,0.18)"
-BREAK_AREA_COLOR = "rgba(239,68,68,0.18)"
+SEG_AREA_COLOR = "rgba(239,68,68,0.18)"
+BREAK_AREA_COLOR = "rgba(16,185,129,0.18)"
 D1_LINE_COLOR = "#f59e0b"
 D2_LINE_COLOR = "#a78bfa"
 CUT_LINE_COLOR = "#fbbf24"
@@ -134,14 +134,16 @@ def build_kline_option(
     mark_areas = []
     for ss, ee in seg_shift:
         mark_areas.append([
-            {"xAxis": categories[ss], "itemStyle": {"color": SEG_AREA_COLOR},
-             "name": "涨停段"},
+            {"xAxis": categories[ss],
+             "itemStyle": {"color": SEG_AREA_COLOR},
+             "label": {"show": False}},
             {"xAxis": categories[ee]},
         ])
     for ss, ee in bp_shift:
         mark_areas.append([
-            {"xAxis": categories[ss], "itemStyle": {"color": BREAK_AREA_COLOR},
-             "name": "断板期"},
+            {"xAxis": categories[ss],
+             "itemStyle": {"color": BREAK_AREA_COLOR},
+             "label": {"show": False}},
             {"xAxis": categories[ee]},
         ])
 
@@ -201,9 +203,9 @@ def build_kline_option(
             })
 
     # ===== M-cut / M-start 3 天窗口标注 =====
-    mcut_points = []
+    # 仅保留金色 markArea 表示"切面 3 天窗口"，日徽章移除（避免互相覆盖；
+    # 详情见顶部 M-cut 卡片）。
     if mcut_daily and cut_s is not None:
-        # 锚点 = 切面日；窗口 = [cut-2, cut-1, cut]
         anchor_view = cut_s
         mcut_start_view = max(0, anchor_view - 2)
         mcut_end_view = anchor_view
@@ -213,44 +215,9 @@ def build_kline_option(
                  "itemStyle": {"color": MCUT_AREA_COLOR,
                                "borderColor": "rgba(251,191,36,0.55)",
                                "borderWidth": 1},
-                 "name": "M-cut"},
+                 "label": {"show": False}},
                 {"xAxis": categories[mcut_end_view]},
             ])
-        # 三日徽章（按 day_offset 倒数：2=最早，0=切面）
-        for day in mcut_daily:
-            off = day.get("day_offset", 0)
-            view_idx = anchor_view - off
-            if view_idx < 0 or view_idx >= len(categories):
-                continue
-            sub_text_form = day.get("form") or ""
-            sub_text_sub = day.get("subdivision") or ""
-            sub_text_emo = day.get("emotion") or ""
-            ds = day.get("day_score", 0)
-            sign = "+" if ds >= 0 else ""
-            color = day.get("color", "#94a3b8")
-            label_text = f"M-cut {day.get('label','')}\n{sub_text_sub}\n{sub_text_emo}  {sign}{ds}"
-            mcut_points.append({
-                "name": f"mcut_{off}",
-                "coord": [categories[view_idx], sub[view_idx]["high"]],
-                "value": label_text,
-                "symbol": "rect",
-                "symbolSize": [1, 1],
-                "symbolOffset": [0, -78 - off * 4],
-                "itemStyle": {"color": "transparent", "borderColor": "transparent"},
-                "label": {
-                    "show": True,
-                    "formatter": label_text,
-                    "color": "#ffffff",
-                    "fontSize": 10,
-                    "fontWeight": "bold",
-                    "lineHeight": 13,
-                    "backgroundColor": "rgba(15,23,42,0.92)",
-                    "borderColor": color,
-                    "borderWidth": 1.5,
-                    "borderRadius": 4,
-                    "padding": [3, 6],
-                },
-            })
 
     if mstart_daily and start_idx is not None:
         anchor_view = _shift(start_idx)
@@ -262,7 +229,7 @@ def build_kline_option(
                      "itemStyle": {"color": MSTART_AREA_COLOR,
                                    "borderColor": "rgba(96,165,250,0.55)",
                                    "borderWidth": 1},
-                     "name": "M-start"},
+                     "label": {"show": False}},
                     {"xAxis": categories[anchor_view]},
                 ])
 
@@ -310,8 +277,8 @@ def build_kline_option(
             ],
         },
         "grid": [
-            {"left": "8%", "right": "8%", "height": "55%", "top": "10%"},
-            {"left": "8%", "right": "8%", "top": "72%", "height": "15%"},
+            {"left": "8%", "right": "8%", "height": "50%", "top": "14%"},
+            {"left": "8%", "right": "8%", "top": "70%", "height": "15%"},
         ],
         "xAxis": [
             {
@@ -330,6 +297,7 @@ def build_kline_option(
                 "axisTick": {"show": False}, "splitLine": {"show": False},
                 "axisLabel": {"show": False},
                 "min": "dataMin", "max": "dataMax",
+                "axisPointer": {"label": {"show": False}},
             },
         ],
         "yAxis": [
@@ -370,8 +338,8 @@ def build_kline_option(
                 "markLine": {"symbol": ["none", "none"], "data": mark_lines, "silent": True}
                 if mark_lines else None,
                 "markPoint": (
-                    {"data": cut_points + form_points + mcut_points, "silent": True}
-                    if (cut_points or form_points or mcut_points) else None
+                    {"data": cut_points + form_points, "silent": True}
+                    if (cut_points or form_points) else None
                 ),
             },
             {"name": "MA5", "type": "line", "data": _calc_ma(5, values),
@@ -401,6 +369,42 @@ def build_kline_option(
     for k in list(series0.keys()):
         if series0[k] is None:
             del series0[k]
+
+    # ===== 固定色块图例（替代 markArea 顶部的文字标签）=====
+    legend_items: list[tuple[str, str, str]] = []  # (label, fill, border)
+    if seg_shift:
+        legend_items.append(("涨停段", SEG_AREA_COLOR, "rgba(239,68,68,0.55)"))
+    if bp_shift:
+        legend_items.append(("断板期", BREAK_AREA_COLOR, "rgba(16,185,129,0.55)"))
+    if mcut_daily and cut_s is not None:
+        legend_items.append(("M-cut 切面窗口", MCUT_AREA_COLOR, "rgba(251,191,36,0.55)"))
+    if mstart_daily and start_idx is not None:
+        legend_items.append(("M-start 启动窗口", MSTART_AREA_COLOR, "rgba(96,165,250,0.55)"))
+    if legend_items:
+        children = []
+        x = 0
+        for label, fill, border in legend_items:
+            children.append({
+                "type": "rect",
+                "left": x,
+                "top": 4,
+                "shape": {"width": 14, "height": 12},
+                "style": {"fill": fill, "stroke": border, "lineWidth": 1},
+            })
+            children.append({
+                "type": "text",
+                "left": x + 18,
+                "top": 5,
+                "style": {"text": label, "fill": text_color, "font": "12px sans-serif"},
+            })
+            x += 18 + len(label) * 14 + 18
+        option["graphic"] = [{
+            "type": "group",
+            "right": 20,
+            "top": 30,
+            "children": children,
+        }]
+
     return option
 
 
