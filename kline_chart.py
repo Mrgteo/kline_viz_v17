@@ -16,6 +16,7 @@ K 线图 ECharts option 构造器。
 """
 from __future__ import annotations
 
+import math
 import pandas as pd
 
 UP_COLOR = "#ec0000"
@@ -105,6 +106,9 @@ def build_kline_option(
         view_start, view_end = 0, n - 1
 
     categories, values, volumes, forms, sub = _rows_to_arrays(rows, view_start, view_end)
+    price_min = math.floor(min(v[2] for v in values))
+    price_max = math.ceil(max(v[3] for v in values))
+    volume_max = max(max((v[1] for v in volumes), default=0), 1)
     text_color = "#f1f5f9" if dark else "#1f2937"
     sub_text = "#cbd5e1" if dark else "#475569"
     border = "#334155" if dark else "#cbd5e1"
@@ -300,15 +304,15 @@ def build_kline_option(
             ],
         },
         "grid": [
-            {"left": "8%", "right": "8%", "height": "50%", "top": "14%"},
-            {"left": "8%", "right": "8%", "top": "70%", "height": "15%"},
+            {"left": "8%", "right": "8%", "height": "54%", "top": "14%"},
+            {"left": "8%", "right": "8%", "top": "68%", "height": "15%"},
         ],
         "xAxis": [
             {
                 "type": "category", "data": categories, "boundaryGap": False,
-                "axisLine": {"onZero": False, "lineStyle": {"color": grid_color}},
-                "axisLabel": {"color": sub_text, "fontSize": 11},
-                "axisTick": {"lineStyle": {"color": grid_color}},
+                "axisLine": {"show": False},
+                "axisLabel": {"show": False},
+                "axisTick": {"show": False},
                 "splitLine": {"show": False},
                 "min": "dataMin", "max": "dataMax",
                 "axisPointer": {"z": 100},
@@ -317,23 +321,45 @@ def build_kline_option(
                 "type": "category", "gridIndex": 1, "data": categories,
                 "boundaryGap": False,
                 "axisLine": {"onZero": False, "lineStyle": {"color": grid_color}},
-                "axisTick": {"show": False}, "splitLine": {"show": False},
-                "axisLabel": {"show": False},
+                "axisTick": {"lineStyle": {"color": grid_color}},
+                "splitLine": {"show": False},
+                "axisLabel": {"color": sub_text, "fontSize": 11, "margin": 8},
                 "min": "dataMin", "max": "dataMax",
                 "axisPointer": {"label": {"show": False}},
             },
         ],
         "yAxis": [
             {
-                "scale": True, "splitArea": {"show": False},
+                "scale": True, "min": price_min, "max": price_max,
+                "splitArea": {"show": False},
                 "axisLabel": {"color": sub_text, "fontSize": 11},
                 "axisLine": {"show": True, "lineStyle": {"color": grid_color}},
+                "axisTick": {"lineStyle": {"color": grid_color}},
                 "splitLine": {"lineStyle": {"color": grid_color, "opacity": 0.3}},
             },
             {
-                "scale": True, "gridIndex": 1, "splitNumber": 2,
-                "axisLabel": {"show": False}, "axisLine": {"show": False},
-                "axisTick": {"show": False}, "splitLine": {"show": False},
+                "scale": True, "gridIndex": 1, "min": 0, "max": volume_max,
+                "splitNumber": 2,
+                "axisLabel": {"show": False},
+                "axisLine": {"show": True, "lineStyle": {"color": grid_color}},
+                "axisTick": {"lineStyle": {"color": grid_color}},
+                "splitLine": {"lineStyle": {"color": grid_color, "opacity": 0.18}},
+            },
+            {
+                "scale": True, "position": "right", "min": price_min, "max": price_max,
+                "splitArea": {"show": False},
+                "axisLabel": {"color": sub_text, "fontSize": 11},
+                "axisLine": {"show": True, "lineStyle": {"color": grid_color}},
+                "axisTick": {"lineStyle": {"color": grid_color}},
+                "splitLine": {"show": False},
+            },
+            {
+                "scale": True, "gridIndex": 1, "position": "right",
+                "min": 0, "max": volume_max, "splitNumber": 2,
+                "axisLabel": {"show": False},
+                "axisLine": {"show": True, "lineStyle": {"color": grid_color}},
+                "axisTick": {"lineStyle": {"color": grid_color}},
+                "splitLine": {"show": False},
             },
         ],
         "dataZoom": [
