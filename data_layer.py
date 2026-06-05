@@ -39,17 +39,104 @@ CONFIG = APP.CONFIG
 CONFIG["worker_count"] = 1
 
 # Streamlit 启动 CWD 未必是项目目录，必须把相对路径转成绝对路径，
-# 否则 ./stock_cache/case_library_break_v20.pkl 找不到 → 触发全量重建 → 卡死。
+# 否则 ./stock_cache/case_library_break_v21.pkl 找不到 → 触发全量重建 → 卡死。
 def _abs(p: str) -> str:
     if not p:
         return p
     return p if os.path.isabs(p) else str((_APP_PATH.parent / p).resolve())
 
-CONFIG["cache_dir"] = _abs(CONFIG.get("cache_dir", "./stock_cache/"))
+
+def _resolve_cache_dir(raw: str) -> str:
+    """解析 cache_dir，若得到的目录里不存在新版 daily_{code}.pkl（无日期段命名），
+    则回退到 app.py 同级的 ./stock_cache/。这样既兼容新版 app.py 写死的
+    '../stock_cache/'（仓库目录布局变化时容易指错），也保持旧版正确解析。
+    """
+    primary = _abs(raw)
+    fallback = str((_APP_PATH.parent / "stock_cache").resolve())
+    new_pat = re.compile(r"^daily_\d{6}\.pkl$")
+
+    def _has_new_daily(d: str) -> bool:
+        try:
+            return os.path.isdir(d) and any(new_pat.match(fn) for fn in os.listdir(d))
+        except OSError:
+            return False
+
+    if _has_new_daily(primary):
+        return primary
+    if _has_new_daily(fallback):
+        return fallback
+    if os.path.isdir(primary):
+        return primary
+    return fallback
+
+
+CONFIG["cache_dir"] = _resolve_cache_dir(CONFIG.get("cache_dir", "./stock_cache/"))
+# 同步给 app.py 用，避免它内部 os.path.join(CONFIG['cache_dir'], ...) 命中错误目录
+APP.CONFIG["cache_dir"] = CONFIG["cache_dir"]
 if CONFIG.get("case_library_cache"):
-    CONFIG["case_library_cache"] = _abs(CONFIG["case_library_cache"])
+    # case_library_cache 必须落在 cache_dir 同级，按文件名重新拼装
+    cache_name = os.path.basename(CONFIG["case_library_cache"])
+    CONFIG["case_library_cache"] = os.path.join(CONFIG["cache_dir"], cache_name)
+    APP.CONFIG["case_library_cache"] = CONFIG["case_library_cache"]
 # app.py 在 import 时已用相对路径调过 makedirs，这里补一次绝对路径的 makedirs
 os.makedirs(CONFIG["cache_dir"], exist_ok=True)
+
+
+# ============================================================
+# v2 → v2(1) 兼容补丁
+# ------------------------------------------------------------
+# 新版 app.py（断板版 v2.0 / 文件来源：断板v2(1).py）取消了
+# get_d1_decay / get_mcut_weight / match_subdivision / match_approx / match_emotion
+# 这些纯函数；m_cut / m_start 子项字段名也从 subdivision/emotion 改成
+# subdivision_v2 / emotion_class。get_mcut_compare_payload 仍依赖这些以渲染
+# M-cut 3 天横条对比，所以这里在不改新版 app.py 的前提下做最小补全。
+# 后续若新版补回这些函数，可直接删除整段补丁。
+# ============================================================
+if not hasattr(APP, "match_subdivision"):
+    def _patched_match_subdivision(sub1, sub2):
+        if sub1 == "无" or sub2 == "无":
+            return False
+        return sub1 == sub2
+    APP.match_subdivision = _patched_match_subdivision
+
+if not hasattr(APP, "match_approx"):
+    def _patched_match_approx(sub1, sub2):
+        if sub1 == "无" or sub2 == "无" or sub1 == sub2:
+            return False
+        info = getattr(APP, "SUBDIVISION_V2_INFO", {})
+        g1 = info.get(sub1, {}).get("group", info.get(sub1, {}).get("group_v2"))
+        g2 = info.get(sub2, {}).get("group", info.get(sub2, {}).get("group_v2"))
+        return g1 is not None and g1 == g2
+    APP.match_approx = _patched_match_approx
+
+if not hasattr(APP, "match_emotion"):
+    def _patched_match_emotion(emo1, emo2):
+        if not emo1 or not emo2:
+            return False
+        return emo1 == emo2
+    APP.match_emotion = _patched_match_emotion
+
+if not hasattr(APP, "get_d1_decay"):
+    def _patched_get_d1_decay(d1_days):
+        # 距 D1 越远，权重衰减越多。用一个温和的指数衰减作为近似。
+        try:
+            d = max(0, int(d1_days))
+        except Exception:
+            d = 0
+        return max(0.4, 1.0 - 0.05 * d)
+    APP.get_d1_decay = _patched_get_d1_decay
+
+if not hasattr(APP, "get_mcut_weight"):
+    _MCUT_WEIGHT_TABLE = {
+        # day_offset: 0=切面日, 1=前1天, 2=前2天
+        "标准": {0: 1.0, 1: 0.7, 2: 0.4},
+        "紧凑": {0: 1.0, 1: 0.8, 2: 0.5},
+        "宽松": {0: 1.0, 1: 0.6, 2: 0.3},
+    }
+    def _patched_get_mcut_weight(scope, day_offset):
+        table = _MCUT_WEIGHT_TABLE.get(scope, _MCUT_WEIGHT_TABLE["标准"])
+        return table.get(int(day_offset), 0.5)
+    APP.get_mcut_weight = _patched_get_mcut_weight
 
 
 def list_cached_stocks(start_date: str, end_date: str) -> list[str]:
@@ -251,7 +338,20 @@ def get_mcut_compare_payload(target_case: dict, cand_case: dict) -> dict:
 
     scope = target_case.get("research_scope", "标准")
     decay = APP.get_d1_decay(target_case.get("cut_to_d1_days", 0))
-    base = APP.CONFIG["micro_mismatch_penalty"]
+    # 新版 app.py 没有 micro_* 这组 CONFIG，给一组温和默认值；如旧 CONFIG 仍然存在则优先取之。
+    cfg = APP.CONFIG
+    base = cfg.get("micro_mismatch_penalty", 12)
+    both_none_bonus = cfg.get("micro_both_none_bonus", 4)
+    exact_bonus = cfg.get("micro_exact_bonus", 6)
+    approx_penalty = cfg.get("micro_approx_penalty", 4)
+    emotion_penalty = cfg.get("micro_emotion_penalty", 8)
+
+    def _sub(d):
+        # 兼容新旧字段名
+        return d.get("subdivision") or d.get("subdivision_v2") or "无"
+
+    def _emo(d):
+        return d.get("emotion") or d.get("emotion_class") or ""
 
     labels = ["前2天", "前1天", "切面日"]
     out_t, out_c = [], []
@@ -259,13 +359,13 @@ def get_mcut_compare_payload(target_case: dict, cand_case: dict) -> dict:
     for i, label in enumerate(labels):
         day_offset = 2 - i
         w = APP.get_mcut_weight(scope, day_offset)
-        ts, cs = tm[i]["subdivision"], cm[i]["subdivision"]
-        te, ce = tm[i]["emotion"], cm[i]["emotion"]
+        ts, cs = _sub(tm[i]), _sub(cm[i])
+        te, ce = _emo(tm[i]), _emo(cm[i])
         tf, cf = tm[i].get("form", ""), cm[i].get("form", "")
 
         if ts == "无" and cs == "无":
             kind, color = "none", "#94a3b8"
-            day_score = round(APP.CONFIG["micro_both_none_bonus"] * decay * w)
+            day_score = round(both_none_bonus * decay * w)
             badge = f"双方无 +{day_score}"
             total_b += day_score
             day_score_signed = day_score
@@ -277,25 +377,25 @@ def get_mcut_compare_payload(target_case: dict, cand_case: dict) -> dict:
             day_score_signed = -v
         elif APP.match_subdivision(ts, cs):
             kind, color = "match", "#10b981"
-            v = round(APP.CONFIG["micro_exact_bonus"] * w)
+            v = round(exact_bonus * w)
             badge = f"精确匹配 +{v}"
             total_b += v
             day_score_signed = v
         elif APP.match_approx(ts, cs):
             kind, color = "approx", "#3b82f6"
-            v = round(APP.CONFIG["micro_approx_penalty"] * w)
+            v = round(approx_penalty * w)
             badge = f"近似 -{v}"
             total_p += v
             day_score_signed = -v
         elif APP.match_emotion(te, ce):
             kind, color = "emotion", "#a78bfa"
-            v = round(APP.CONFIG["micro_emotion_penalty"] * w)
+            v = round(emotion_penalty * w)
             badge = f"情绪同 -{v}"
             total_p += v
             day_score_signed = -v
         else:
             kind, color = "mismatch", "#ef4444"
-            v = round(APP.CONFIG["micro_mismatch_penalty"] * w)
+            v = round(base * w)
             badge = f"不匹配 -{v}"
             total_p += v
             day_score_signed = -v

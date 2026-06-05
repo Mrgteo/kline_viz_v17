@@ -26,6 +26,70 @@ def _get_dl(algo_key: str):
     return _dl_v17 if algo_key == "v1.7" else _dl_v23
 
 
+# --- 推荐池 ---------------------------------------------------------------
+# 用户标注的高质量样本：(stock_code, stock_name, cut_date_str, display_label)
+# 提供"快捷填入 + 静态匹配缓存"，命中静态缓存时点击执行匹配秒出结果。
+RECOMMEND_POOL = [
+    ("601991", "大唐发电", "2026-05-15", "高位断板反抽"),
+    ("002421", "达实智能", "2026-05-28", "高位断板反抽"),
+    ("002918", "蒙娜丽莎", "2026-05-20", "高位断板A杀"),
+    ("601991", "大唐发电", "2026-05-20", "高位异动大跌"),
+    ("002081", "金螳螂", "2026-05-18", "人气股多波"),
+    ("002342", "巨力索具", "2026-01-19", "中位断板止跌"),
+    ("002342", "巨力索具", "2026-01-21", "中位断板反抽"),
+    ("600439", "瑞贝卡", "2024-10-31", "低位断板反包"),
+    ("002114", "罗平", "2025-12-01", "低位断板反抽"),
+    ("000066", "中国长城", "2026-05-11", "低位断板止跌"),
+]
+
+
+def _recommend_cache_path(code: str, cut_date_str: str, algo_key: str) -> str:
+    import os
+    cache_dir = _get_dl(algo_key).CONFIG.get("cache_dir", "./stock_cache/")
+    folder = os.path.join(cache_dir, "recommend_pool_v22")
+    os.makedirs(folder, exist_ok=True)
+    return os.path.join(folder, f"{code}_{cut_date_str}.pkl")
+
+
+def _try_load_recommend_static(code: str, cut_date_str: str, algo_key: str):
+    import os, pickle
+    fp = _recommend_cache_path(code, cut_date_str, algo_key)
+    if not os.path.exists(fp):
+        return None
+    try:
+        with open(fp, "rb") as f:
+            return pickle.load(f)
+    except Exception:
+        return None
+
+
+def _save_recommend_static(code: str, cut_date_str: str, algo_key: str, result: dict):
+    import pickle
+    fp = _recommend_cache_path(code, cut_date_str, algo_key)
+    try:
+        with open(fp, "wb") as f:
+            pickle.dump(result, f)
+        return True
+    except Exception:
+        return False
+
+
+def _is_recommend_key(code: str, cut_date_str: str) -> bool:
+    return (code.strip(), cut_date_str) in {
+        (c, d) for (c, _n, d, _label) in RECOMMEND_POOL
+    }
+
+
+def _trim_match_result(result: dict, top_n: int) -> dict:
+    """Return a shallow copy whose visible ranked list respects the current Top N."""
+    if not isinstance(result, dict):
+        return result
+    out = dict(result)
+    ranked_full = out.get("ranked_full") or out.get("ranked") or []
+    out["ranked"] = list(ranked_full[:top_n]) if top_n else list(ranked_full)
+    return out
+
+
 # 默认指向 v1.7，模块顶部静态引用保持兼容
 dl = _dl_v17
 
@@ -521,12 +585,12 @@ components.html(
 )
 
 
-@st.cache_resource(show_spinner="加载股票列表...")
+@st.cache_resource(show_spinner=False)
 def cached_stock_list(algo_key: str = "v1.7"):
     return _get_dl(algo_key).load_stock_list()
 
 
-@st.cache_resource(show_spinner="加载日K数据（首次较慢，命中缓存秒开）...")
+@st.cache_resource(show_spinner=False)
 def cached_daily_data(start_date: str, end_date: str, algo_key: str = "v1.7"):
     _dl = _get_dl(algo_key)
     si = cached_stock_list(algo_key)
@@ -534,14 +598,18 @@ def cached_daily_data(start_date: str, end_date: str, algo_key: str = "v1.7"):
     return ad, si
 
 
-@st.cache_resource(show_spinner="加载/构建案例库（首次需数分钟，建议先在终端跑 prebuild_case_library.py）...")
+@st.cache_resource(show_spinner=False)
 def cached_case_library(start_date: str, end_date: str, algo_key: str = "v1.7"):
     _dl = _get_dl(algo_key)
     ad, si = cached_daily_data(start_date, end_date, algo_key)
     return _dl.load_case_library(ad, si)
 
 
-@st.cache_data(show_spinner="执行匹配...")
+# 注意：返回值含 list[dict] 等大对象，用 cache_resource 比 cache_data 更稳；
+# 此外这里**不再**让 spinner 包住整个 match 调用，改由调用处分阶段显示进度，
+# 避免外层 "执行匹配..." 把内层「加载日K / 加载案例库」的进度全部吃掉，
+# 让用户误以为前端卡死。
+@st.cache_resource(show_spinner=False)
 def cached_match(stock_code: str, cut_date_str: str,
                   start_date: str, end_date: str, top_n: int,
                   algo_key: str = "v1.7"):
@@ -553,7 +621,6 @@ def cached_match(stock_code: str, cut_date_str: str,
 
 with st.sidebar:
     st.title("📈 K线相似匹配")
-    st.caption("参考 go-stock 配色 · 红涨绿跌 · ECharts")
 
     algo_choice = st.radio(
         "算法版本",
@@ -565,27 +632,83 @@ with st.sidebar:
     algo_key = "v1.7" if algo_choice.startswith("v2.0") else "v2.3"
     dl = _get_dl(algo_key)
 
-    stock_code = st.text_input("标的股票代码", value="002342")
-    cut_date = st.date_input("切面日", value=date(2026, 1, 21))
+    # 推荐池快捷填入：按钮按下时把 stock_code/cut_date 写到 session_state，
+    # 下一帧 rerun 时 text_input/date_input 自动读取该值。
+    _pending = st.session_state.pop("_pool_pick", None)
+    if _pending is not None:
+        st.session_state["sb_stock_code"] = _pending[0]
+        st.session_state["sb_cut_date"] = _pending[1]
+
+    stock_code = st.text_input("标的股票代码", value="002342", key="sb_stock_code")
+    cut_date = st.date_input("切面日", value=date(2026, 1, 21), key="sb_cut_date")
     cut_date_str = cut_date.strftime("%Y-%m-%d")
     start_date = st.date_input("数据起始日", value=date(2023, 1, 1))
-    end_date = st.date_input("数据结束日", value=date(2026, 5, 19))
+    end_date = st.date_input("数据结束日", value=date(2026, 6, 1))
     top_n = st.slider("Top N 候选", 10, 100, 50, step=5)
+
+    # ---- 推荐池：仅 v2.0 / 断板版显示，选择方式与候选案例下拉一致 ----
+    import os
+    if algo_key == "v1.7":
+        st.markdown("#### ⭐ 推荐池")
+
+        _selected_key = (stock_code.strip(), cut_date_str)
+        _matched_pool_idx = next(
+            (i for i, (c, _n, d, _label) in enumerate(RECOMMEND_POOL)
+             if (c, d) == _selected_key),
+            None,
+        )
+        _pool_options = [None] + list(range(len(RECOMMEND_POOL)))
+        if "recommend_pool_select" not in st.session_state:
+            st.session_state["recommend_pool_select"] = _matched_pool_idx
+        elif st.session_state.get("recommend_pool_select") != _matched_pool_idx:
+            st.session_state["recommend_pool_select"] = _matched_pool_idx
+
+        def _fmt_pool_choice(idx) -> str:
+            if idx is None:
+                return "未选择推荐标的"
+            _c, n, _d, label = RECOMMEND_POOL[idx]
+            return f"{label}：{n}"
+
+        def _apply_recommend_pool_choice():
+            idx = st.session_state.get("recommend_pool_select")
+            if idx is None:
+                return
+            from datetime import datetime as _dtm
+            c, _n, d, _label = RECOMMEND_POOL[idx]
+            st.session_state["_pool_pick"] = (
+                c, _dtm.strptime(d, "%Y-%m-%d").date()
+            )
+
+        _pool_idx = st.selectbox(
+            "选择推荐标的（自动填入上方输入框）",
+            _pool_options,
+            format_func=_fmt_pool_choice,
+            key="recommend_pool_select",
+            on_change=_apply_recommend_pool_choice,
+        )
 
     st.divider()
     dark = st.toggle("深色主题", value=True)
     annotate_forms = st.toggle("标注 K 线形态", value=False)
 
     run = st.button("🚀 执行匹配", type="primary", use_container_width=True)
+    run_prog_slot = st.empty()
+    run_status_slot = st.empty()
 
     st.divider()
     st.markdown("#### ⬇️ 下载/更新缓存数据")
     dl_start = st.date_input("下载起始日", value=date(2023, 1, 1), key="dl_start")
-    dl_end = st.date_input("下载结束日", value=date(2026, 5, 19), key="dl_end")
+    dl_end = st.date_input("下载结束日", value=date(2026, 6, 1), key="dl_end")
     do_download = st.button("📥 下载数据", use_container_width=True, key="btn_download")
     dl_prog_slot = st.empty()
     dl_status_slot = st.empty()
     dl_msg_slot = st.empty()
+
+    st.divider()
+    st.markdown("#### ♻️ 缓存管理")
+    st.caption("清空 Streamlit 内存缓存（股票列表 / 日 K / 案例库 / 匹配结果）；不会删除磁盘 pkl 文件。")
+    reset = st.button("🧹 清空缓存并重试", use_container_width=True, key="btn_reset")
+    reset_msg_slot = st.empty()
 
 if do_download:
     with st.sidebar:
@@ -615,6 +738,15 @@ if do_download:
         except Exception as e:
             dl_msg_slot.error(f"下载失败：{e}")
 
+if reset:
+    cached_stock_list.clear()
+    cached_daily_data.clear()
+    cached_case_library.clear()
+    cached_match.clear()
+    st.session_state.pop("match_result", None)
+    st.session_state.pop("match_args", None)
+    reset_msg_slot.success("✅ 缓存已清空，请重新点击「🚀 执行匹配」")
+
 if not run and "match_result" not in st.session_state:
     st.info("⬅️ 请在左侧输入标的并点击「执行匹配」")
     st.stop()
@@ -623,7 +755,51 @@ if run:
     try:
         start_str = start_date.strftime("%Y%m%d")
         end_str = end_date.strftime("%Y%m%d")
-        result = cached_match(stock_code, cut_date_str, start_str, end_str, top_n, algo_key)
+
+        # 优先：推荐池静态缓存命中（pickle 直接反序列化，毫秒级出结果）
+        static_hit = None
+        if algo_key == "v1.7" and _is_recommend_key(stock_code, cut_date_str):
+            static_hit = _try_load_recommend_static(stock_code.strip(),
+                                                     cut_date_str, algo_key)
+        if static_hit is not None:
+            bar = run_prog_slot.progress(1.0, text="✅ 推荐池静态缓存命中")
+            run_status_slot.caption(
+                f"已从静态缓存加载 {stock_code.strip()} {cut_date_str} 的匹配结果"
+            )
+            result = _trim_match_result(static_hit, top_n)
+            run_prog_slot.empty()
+            run_status_slot.empty()
+        else:
+            # 分阶段进度提示，让用户能看到「正在做什么」，而不是单一 "执行匹配..." 蒙层
+            import time as _time
+            bar = run_prog_slot.progress(0.0, text="① 加载股票列表...")
+            _t = _time.time()
+            si_list = cached_stock_list(algo_key)
+            run_status_slot.caption(f"股票列表 {len(si_list)} 只 / {_time.time()-_t:.1f}s")
+
+            bar.progress(0.20, text="② 加载日 K 数据（首次约 10s，命中缓存秒开）...")
+            _t = _time.time()
+            ad, si = cached_daily_data(start_str, end_str, algo_key)
+            run_status_slot.caption(f"日 K 数据 {len(ad)} 只 / {_time.time()-_t:.1f}s")
+
+            bar.progress(0.55, text="③ 加载案例库（首次约 5s，命中缓存秒开）...")
+            _t = _time.time()
+            cl = cached_case_library(start_str, end_str, algo_key)
+            run_status_slot.caption(f"案例库 {len(cl)} 个 / {_time.time()-_t:.1f}s")
+
+            bar.progress(0.85, text="④ 执行硬过滤 + 评分排序...")
+            _t = _time.time()
+            result = cached_match(stock_code, cut_date_str, start_str, end_str, top_n, algo_key)
+            run_status_slot.caption(f"匹配 Top{top_n} 完成 / {_time.time()-_t:.1f}s")
+            bar.progress(1.0, text="✅ 匹配完成")
+            run_prog_slot.empty()
+            run_status_slot.empty()
+
+            # 若本次输入正好命中推荐池，则顺手把结果写入静态缓存供下次秒开
+            if algo_key == "v1.7" and _is_recommend_key(stock_code, cut_date_str):
+                _save_recommend_static(stock_code.strip(), cut_date_str,
+                                        algo_key, result)
+
         st.session_state["match_result"] = result
         st.session_state["match_args"] = {
             "stock_code": stock_code, "cut_date_str": cut_date_str,
@@ -633,7 +809,11 @@ if run:
         st.session_state["selected_cand_idx"] = 0
         st.session_state["active_view"] = "main"
     except Exception as e:
+        run_prog_slot.empty()
+        run_status_slot.empty()
+        import traceback
         st.error(f"匹配失败：{e}")
+        st.code(traceback.format_exc())
         st.stop()
 
 result = st.session_state["match_result"]
@@ -746,19 +926,32 @@ elif view == "detail":
     if not ranked:
         st.warning("无候选案例")
     else:
-        # 仅展示 final_score >= 60 的候选，并按分数从高到低排序
+        # 优先展示 final_score >= 60 的候选；若没有，则展示得分最高的前 3 个。
         ranked_filtered = [(i, c) for i, c in enumerate(ranked)
                            if c.get("final_score", 0) >= 60]
         ranked_filtered.sort(key=lambda x: x[1].get("final_score", 0), reverse=True)
+        fallback_top3 = False
+        if not ranked_filtered:
+            fallback_top3 = True
+            ranked_filtered = sorted(
+                [(i, c) for i, c in enumerate(ranked)],
+                key=lambda x: x[1].get("final_score", 0),
+                reverse=True,
+            )[:3]
+        filter_text = (
+            f"暂无得分 ≥ 60 的候选，已展示得分最高的前 {len(ranked_filtered)} 个标的"
+            if fallback_top3 else
+            f"已筛选得分 ≥ 60 的候选 {len(ranked_filtered)} 条 / 全部 {len(ranked)} 条"
+        )
         st.markdown(
             f"<p style='color:var(--text-sub); font-size:14px; margin-bottom:8px;'>"
-            f"已筛选得分 ≥ 60 的候选 {len(ranked_filtered)} 条 / 全部 {len(ranked)} 条 · "
+            f"{filter_text} · "
             f"在下方下拉框中选择候选可快速跳转至对应卡片"
             f"</p>",
             unsafe_allow_html=True,
         )
         if not ranked_filtered:
-            st.info("暂无得分 ≥ 60 的候选。")
+            st.info("暂无可展示候选。")
         else:
             # 选择候选 → 锚点跳转
             options_idx = [orig_i for orig_i, _ in ranked_filtered]
@@ -941,9 +1134,17 @@ elif view == "detail":
                                key=f"detail_target_kline_{orig_i}")
                 with kline_right:
                     st.subheader("📈 候选 K 线")
+                    cand_score = cand.get("final_score")
+                    cand_score_text = (
+                        f"  {cand_score:.2f}分"
+                        if cand_score is not None else ""
+                    )
                     opt = build_kline_option(
                         cand_rows,
-                        title=f"{cand['stock_code']} {cand.get('stock_name','')}",
+                        title=(
+                            f"{cand['stock_code']} {cand.get('stock_name','')}"
+                            f"{cand_score_text}"
+                        ),
                         seq_start=cand_seq_start, cut_idx=cand_cut_idx,
                         segments=cand_segments, break_periods=cand_bps,
                         d1_idx=cand_d1, d2_idx=cand_d2,

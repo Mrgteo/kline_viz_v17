@@ -28,8 +28,9 @@ D2_LINE_COLOR = "#a78bfa"
 CUT_LINE_COLOR = "#fbbf24"
 MCUT_AREA_COLOR = "rgba(251,191,36,0.20)"
 MSTART_AREA_COLOR = "rgba(96,165,250,0.18)"
-RESEARCH_AREA_COLOR = "rgba(255,255,255,0.02)"
-RESEARCH_AREA_BORDER = "rgba(255,255,255,0.78)"
+RESEARCH_AREA_COLOR = "rgba(255,255,255,0.18)"
+RESEARCH_AREA_BORDER = "rgba(255,255,255,0.46)"
+RESEARCH_AREA_SHADOW = "rgba(255,255,255,0.15)"
 
 
 def _fmt_date(d) -> str:
@@ -163,7 +164,9 @@ def build_kline_option(
             {"xAxis": categories[research_start_s],
              "itemStyle": {"color": RESEARCH_AREA_COLOR,
                            "borderColor": RESEARCH_AREA_BORDER,
-                           "borderWidth": 1},
+                           "borderWidth": 1,
+                           "shadowBlur": 18,
+                           "shadowColor": RESEARCH_AREA_SHADOW},
              "label": {"show": False}},
             {"xAxis": categories[cut_s]},
         ])
