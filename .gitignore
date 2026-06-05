@@ -1,4 +1,3 @@
-stock_cache/
 __pycache__/
 *.pyc
 .claude/
