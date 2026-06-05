@@ -11,7 +11,7 @@ import pandas as pd
 import app as APP
 
 
-PROJECT_DIR = Path(r"C:\Users\KaiPanLa\Desktop\File\Code\kline_viz_v17")
+PROJECT_DIR = Path(__file__).resolve().parent
 CACHE_DIR = PROJECT_DIR / "stock_cache"
 TARGET_CACHE = CACHE_DIR / "case_library_break_v22.pkl"
 OLD_CACHE = CACHE_DIR / "case_library_break_v21.pkl"

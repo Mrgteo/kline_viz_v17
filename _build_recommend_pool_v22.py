@@ -10,7 +10,7 @@ import pandas as pd
 import data_layer as dl
 
 
-PROJECT_DIR = Path(r"C:\Users\KaiPanLa\Desktop\File\Code\kline_viz_v17")
+PROJECT_DIR = Path(__file__).resolve().parent
 CACHE_DIR = PROJECT_DIR / "stock_cache"
 POOL_DIR = CACHE_DIR / "recommend_pool_v22"
 CASE_LIBRARY = CACHE_DIR / "case_library_break_v22.pkl"

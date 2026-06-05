@@ -20,7 +20,8 @@ warnings.filterwarnings('ignore')
 # 配置
 # ============================================================
 
-PROJECT_CACHE_DIR = r'C:\Users\KaiPanLa\Desktop\File\Code\kline_viz_v17\stock_cache'
+PROJECT_DIR = os.path.dirname(os.path.abspath(__file__))
+PROJECT_CACHE_DIR = os.path.join(PROJECT_DIR, 'stock_cache')
 
 CONFIG = {
     'cache_dir': PROJECT_CACHE_DIR,

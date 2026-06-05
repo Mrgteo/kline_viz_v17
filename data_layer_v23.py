@@ -138,8 +138,41 @@ def list_cached_stocks(start_date: str, end_date: str) -> list[str]:
 
 
 # ============== 股票列表 / 日 K ==============
+def _load_stock_list_from_cache() -> pd.DataFrame:
+    """AkShare 不可用时，从本地 daily_*.pkl 缓存反推股票列表。"""
+    import pickle
+
+    codes = list_cached_stocks("20230101", "20260601")
+    name_map: dict[str, str] = {}
+    case_cache = CONFIG.get("case_library_cache")
+    if case_cache and os.path.exists(case_cache):
+        try:
+            with open(case_cache, "rb") as f:
+                cases = pickle.load(f)
+            for case in cases:
+                code = str(case.get("stock_code", "")).zfill(6)
+                name = str(case.get("stock_name", "")).strip()
+                if code and name:
+                    name_map[code] = name
+        except Exception:
+            pass
+
+    if not codes and name_map:
+        codes = sorted(name_map)
+    return pd.DataFrame({
+        "code": codes,
+        "name": [name_map.get(code, "未知") for code in codes],
+    })
+
+
 def load_stock_list():
-    return APP.get_main_board_stock_list()
+    try:
+        return APP.get_main_board_stock_list()
+    except Exception:
+        cached = _load_stock_list_from_cache()
+        if len(cached) > 0:
+            return cached
+        raise
 
 
 def load_daily_data(stock_list, start_date: str, end_date: str) -> dict[str, pd.DataFrame]:
