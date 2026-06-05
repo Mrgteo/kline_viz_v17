@@ -149,6 +149,14 @@ def build_kline_option(
                 research_start_idx = prior_segments[-1][0]
     research_start_s = _shift(research_start_idx)
 
+    # ===== 段落 markArea 显示开关 =====
+    # 暂时只保留研究范围框，隐藏涨停段 / 断板期 / M-cut 切面窗口 / M-start 启动窗口。
+    # 需要切回时把对应开关改回 True 即可，相关计算与代码完整保留。
+    _SHOW_SEG_AREAS = False
+    _SHOW_BREAK_AREAS = False
+    _SHOW_MCUT_AREA = False
+    _SHOW_MSTART_AREA = False
+
     mark_areas = []
     if research_start_s is not None and cut_s is not None and research_start_s <= cut_s:
         mark_areas.append([
@@ -159,20 +167,22 @@ def build_kline_option(
              "label": {"show": False}},
             {"xAxis": categories[cut_s]},
         ])
-    for ss, ee in seg_shift:
-        mark_areas.append([
-            {"xAxis": categories[ss],
-             "itemStyle": {"color": SEG_AREA_COLOR},
-             "label": {"show": False}},
-            {"xAxis": categories[ee]},
-        ])
-    for ss, ee in bp_shift:
-        mark_areas.append([
-            {"xAxis": categories[ss],
-             "itemStyle": {"color": BREAK_AREA_COLOR},
-             "label": {"show": False}},
-            {"xAxis": categories[ee]},
-        ])
+    if _SHOW_SEG_AREAS:
+        for ss, ee in seg_shift:
+            mark_areas.append([
+                {"xAxis": categories[ss],
+                 "itemStyle": {"color": SEG_AREA_COLOR},
+                 "label": {"show": False}},
+                {"xAxis": categories[ee]},
+            ])
+    if _SHOW_BREAK_AREAS:
+        for ss, ee in bp_shift:
+            mark_areas.append([
+                {"xAxis": categories[ss],
+                 "itemStyle": {"color": BREAK_AREA_COLOR},
+                 "label": {"show": False}},
+                {"xAxis": categories[ee]},
+            ])
 
     mark_lines = []
 
@@ -203,10 +213,19 @@ def build_kline_option(
             },
         })
 
+    # ===== D1 / D2 / 切面 标注显示开关 =====
+    # 隐藏 D1 / D2，仅保留切面标注。需要切回时把对应开关改回 True 即可。
+    _SHOW_D1_ANCHOR = False
+    _SHOW_D2_ANCHOR = False
+    _SHOW_CUT_ANCHOR = True
+
     # 三个标记沿 Y 方向错开，避免相邻日同时存在时叠到一起
-    _mk_anchor(d1_s, "D1", D1_LINE_COLOR, -18)
-    _mk_anchor(d2_s, "D2", D2_LINE_COLOR, -36)
-    _mk_anchor(cut_s, "切面", CUT_LINE_COLOR, -54)
+    if _SHOW_D1_ANCHOR:
+        _mk_anchor(d1_s, "D1", D1_LINE_COLOR, -18)
+    if _SHOW_D2_ANCHOR:
+        _mk_anchor(d2_s, "D2", D2_LINE_COLOR, -36)
+    if _SHOW_CUT_ANCHOR:
+        _mk_anchor(cut_s, "切面", CUT_LINE_COLOR, -18)
 
     form_points = []
     if annotate_forms:
@@ -230,9 +249,8 @@ def build_kline_option(
             })
 
     # ===== M-cut / M-start 3 天窗口标注 =====
-    # 仅保留金色 markArea 表示"切面 3 天窗口"，日徽章移除（避免互相覆盖；
-    # 详情见顶部 M-cut 卡片）。
-    if mcut_daily and cut_s is not None:
+    # 受上方 _SHOW_MCUT_AREA / _SHOW_MSTART_AREA 开关控制（默认隐藏，仅留研究范围框）。
+    if _SHOW_MCUT_AREA and mcut_daily and cut_s is not None:
         anchor_view = cut_s
         mcut_start_view = max(0, anchor_view - 2)
         mcut_end_view = anchor_view
@@ -246,7 +264,7 @@ def build_kline_option(
                 {"xAxis": categories[mcut_end_view]},
             ])
 
-    if mstart_daily and start_idx is not None:
+    if _SHOW_MSTART_AREA and mstart_daily and start_idx is not None:
         anchor_view = _shift(start_idx)
         if anchor_view is not None:
             mstart_start_view = max(0, anchor_view - 2)
@@ -422,16 +440,17 @@ def build_kline_option(
             del series0[k]
 
     # ===== 固定色块图例（替代 markArea 顶部的文字标签）=====
+    # 仅展示当前实际渲染的色块，与上方 _SHOW_* 开关保持一致。
     legend_items: list[tuple[str, str, str]] = []  # (label, fill, border)
     if research_start_s is not None and cut_s is not None and research_start_s <= cut_s:
         legend_items.append(("研究范围", RESEARCH_AREA_COLOR, RESEARCH_AREA_BORDER))
-    if seg_shift:
+    if _SHOW_SEG_AREAS and seg_shift:
         legend_items.append(("涨停段", SEG_AREA_COLOR, "rgba(239,68,68,0.55)"))
-    if bp_shift:
+    if _SHOW_BREAK_AREAS and bp_shift:
         legend_items.append(("断板期", BREAK_AREA_COLOR, "rgba(16,185,129,0.55)"))
-    if mcut_daily and cut_s is not None:
+    if _SHOW_MCUT_AREA and mcut_daily and cut_s is not None:
         legend_items.append(("M-cut 切面窗口", MCUT_AREA_COLOR, "rgba(251,191,36,0.55)"))
-    if mstart_daily and start_idx is not None:
+    if _SHOW_MSTART_AREA and mstart_daily and start_idx is not None:
         legend_items.append(("M-start 启动窗口", MSTART_AREA_COLOR, "rgba(96,165,250,0.55)"))
     if legend_items:
         children = []

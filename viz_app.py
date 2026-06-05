@@ -834,17 +834,20 @@ elif view == "detail":
                         mcut_payload = None
 
                 # 顶部 4 个 metric
-                m1, m2, m3, m4 = st.columns(4)
-                m1.metric("候选代码", cand["stock_code"], cand.get("stock_name", ""))
-                m2.metric("最终得分", f"{cand['final_score']:.2f}",
-                          f"结构 {cand.get('structure_score', 0):.1f}")
-                m3.metric("距离扣分", f"-{cand.get('distance_penalty', 0):.1f}")
-                nx = (f"{cand['next_day_pct']:.2%}"
-                      if cand["next_day_pct"] is not None else "-")
-                m4.metric("次日表现", nx,
-                          "涨停" if cand.get("next_day_is_zt") else "")
+                # 暂时隐藏（保留代码以便后续切回，将 _SHOW_TOP_METRICS 改回 True 即可）
+                _SHOW_TOP_METRICS = False
+                if _SHOW_TOP_METRICS:
+                    m1, m2, m3, m4 = st.columns(4)
+                    m1.metric("候选代码", cand["stock_code"], cand.get("stock_name", ""))
+                    m2.metric("最终得分", f"{cand['final_score']:.2f}",
+                              f"结构 {cand.get('structure_score', 0):.1f}")
+                    m3.metric("距离扣分", f"-{cand.get('distance_penalty', 0):.1f}")
+                    nx = (f"{cand['next_day_pct']:.2%}"
+                          if cand["next_day_pct"] is not None else "-")
+                    m4.metric("次日表现", nx,
+                              "涨停" if cand.get("next_day_is_zt") else "")
 
-                st.write("")
+                    st.write("")
 
                 # 候选 K 线推导
                 cand_rows = dl.precompute_rows(cand["stock_code"], ad3)
@@ -871,7 +874,9 @@ elif view == "detail":
                                 cand_d2 = bp[0] + 1
 
                 # ===== M-cut 3 天微型结构对比横条 =====
-                if mcut_payload and mcut_payload["target"]:
+                # 暂时隐藏（保留代码以便后续切回，将 _SHOW_MCUT_BAR 改回 True 即可）
+                _SHOW_MCUT_BAR = False
+                if _SHOW_MCUT_BAR and mcut_payload and mcut_payload["target"]:
                     _color_label = {
                         "match": ("精确匹配", "#10b981"),
                         "approx": ("近似", "#3b82f6"),
