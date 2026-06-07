@@ -217,7 +217,7 @@ def build_kline_option(
         })
 
     # ===== D1 / D2 / 切面 标注显示开关 =====
-    # 隐藏 D1 / D2，仅保留切面标注。需要切回时把对应开关改回 True 即可。
+    # D1 / D2 / 切面标注均已隐藏。需要切回时把对应开关改回 True 即可。
     _SHOW_D1_ANCHOR = False
     _SHOW_D2_ANCHOR = False
     _SHOW_CUT_ANCHOR = False
