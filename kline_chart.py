@@ -220,7 +220,7 @@ def build_kline_option(
     # 隐藏 D1 / D2，仅保留切面标注。需要切回时把对应开关改回 True 即可。
     _SHOW_D1_ANCHOR = False
     _SHOW_D2_ANCHOR = False
-    _SHOW_CUT_ANCHOR = True
+    _SHOW_CUT_ANCHOR = False
 
     # 三个标记沿 Y 方向错开，避免相邻日同时存在时叠到一起
     if _SHOW_D1_ANCHOR:
@@ -495,13 +495,6 @@ def build_thumbnail_option(rows: list[dict], cut_idx: int, *,
     categories, values, _vol, _f, _ = _rows_to_arrays(rows, start, end)
     cut_s = cut_idx - start if 0 <= cut_idx - start < len(categories) else None
     mark_lines = []
-    if cut_s is not None:
-        mark_lines.append({
-            "xAxis": categories[cut_s],
-            "lineStyle": {"width": 0, "opacity": 0},
-            "label": {"formatter": "切", "color": CUT_LINE_COLOR,
-                      "fontWeight": "bold"},
-        })
     text_color = "#f1f5f9" if dark else "#1f2937"
     return {
         "title": {"text": title, "left": "center", "top": 2,

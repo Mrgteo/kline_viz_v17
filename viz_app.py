@@ -30,16 +30,16 @@ def _get_dl(algo_key: str):
 # 用户标注的高质量样本：(stock_code, stock_name, cut_date_str, display_label)
 # 提供"快捷填入 + 静态匹配缓存"，命中静态缓存时点击执行匹配秒出结果。
 RECOMMEND_POOL = [
-    ("601991", "大唐发电", "2026-05-15", "高位断板反抽"),
-    ("002421", "达实智能", "2026-05-28", "高位断板反抽"),
-    ("002918", "蒙娜丽莎", "2026-05-20", "高位断板A杀"),
-    ("601991", "大唐发电", "2026-05-20", "高位异动大跌"),
-    ("002081", "金螳螂", "2026-05-18", "人气股多波"),
-    ("002342", "巨力索具", "2026-01-19", "中位断板止跌"),
-    ("002342", "巨力索具", "2026-01-21", "中位断板反抽"),
-    ("600439", "瑞贝卡", "2024-10-31", "低位断板反包"),
-    ("002114", "罗平", "2025-12-01", "低位断板反抽"),
-    ("000066", "中国长城", "2026-05-11", "低位断板止跌"),
+    ("601991", "大唐发电", "2026-05-15", "高位断板反抽", "一般"),
+    ("002421", "达实智能", "2026-05-28", "高位断板反抽", "一般"),
+    ("002918", "蒙娜丽莎", "2026-05-20", "高位断板A杀", "好"),
+    ("601991", "大唐发电", "2026-05-20", "高位异动大跌", "好"),
+    ("002081", "金螳螂", "2026-05-18", "人气股多波", "一般"),
+    ("002342", "巨力索具", "2026-01-19", "中位断板止跌", "好"),
+    ("002342", "巨力索具", "2026-01-21", "中位断板反抽", "一般"),
+    ("600439", "瑞贝卡", "2024-10-31", "低位断板反包", "一般"),
+    ("002114", "罗平锌电", "2025-12-01", "低位断板反抽", "一般"),
+    ("000066", "中国长城", "2026-05-11", "低位断板止跌", "不好"),
 ]
 
 
@@ -76,7 +76,7 @@ def _save_recommend_static(code: str, cut_date_str: str, algo_key: str, result: 
 
 def _is_recommend_key(code: str, cut_date_str: str) -> bool:
     return (code.strip(), cut_date_str) in {
-        (c, d) for (c, _n, d, _label) in RECOMMEND_POOL
+        (c, d) for (c, _n, d, _label, _rating) in RECOMMEND_POOL
     }
 
 
@@ -653,7 +653,7 @@ with st.sidebar:
 
         _selected_key = (stock_code.strip(), cut_date_str)
         _matched_pool_idx = next(
-            (i for i, (c, _n, d, _label) in enumerate(RECOMMEND_POOL)
+            (i for i, (c, _n, d, _label, _rating) in enumerate(RECOMMEND_POOL)
              if (c, d) == _selected_key),
             None,
         )
@@ -666,15 +666,15 @@ with st.sidebar:
         def _fmt_pool_choice(idx) -> str:
             if idx is None:
                 return "未选择推荐标的"
-            _c, n, _d, label = RECOMMEND_POOL[idx]
-            return f"{label}：{n}"
+            _c, n, _d, label, rating = RECOMMEND_POOL[idx]
+            return f"{label}：{n}  [{rating}]"
 
         def _apply_recommend_pool_choice():
             idx = st.session_state.get("recommend_pool_select")
             if idx is None:
                 return
             from datetime import datetime as _dtm
-            c, _n, d, _label = RECOMMEND_POOL[idx]
+            c, _n, d, _label, _rating = RECOMMEND_POOL[idx]
             st.session_state["_pool_pick"] = (
                 c, _dtm.strptime(d, "%Y-%m-%d").date()
             )
@@ -926,22 +926,20 @@ elif view == "detail":
     if not ranked:
         st.warning("无候选案例")
     else:
-        # 优先展示 final_score >= 60 的候选；若没有，则展示得分最高的前 3 个。
-        ranked_filtered = [(i, c) for i, c in enumerate(ranked)
-                           if c.get("final_score", 0) >= 60]
-        ranked_filtered.sort(key=lambda x: x[1].get("final_score", 0), reverse=True)
-        fallback_top3 = False
-        if not ranked_filtered:
-            fallback_top3 = True
-            ranked_filtered = sorted(
-                [(i, c) for i, c in enumerate(ranked)],
-                key=lambda x: x[1].get("final_score", 0),
-                reverse=True,
-            )[:3]
+        above60 = sorted(
+            [(i, c) for i, c in enumerate(ranked) if c.get("final_score", 0) >= 60],
+            key=lambda x: x[1].get("final_score", 0), reverse=True,
+        )
+        above60_ids = {i for i, _ in above60}
+        below60_top3 = sorted(
+            [(i, c) for i, c in enumerate(ranked) if i not in above60_ids],
+            key=lambda x: x[1].get("final_score", 0), reverse=True,
+        )[:3]
+        ranked_filtered = above60 + below60_top3
         filter_text = (
-            f"暂无得分 ≥ 60 的候选，已展示得分最高的前 {len(ranked_filtered)} 个标的"
-            if fallback_top3 else
-            f"已筛选得分 ≥ 60 的候选 {len(ranked_filtered)} 条 / 全部 {len(ranked)} 条"
+            f"已筛选得分 ≥ 60 的候选 {len(above60)} 条"
+            f"（另附低相似度前 {len(below60_top3)} 条）"
+            f" / 全部 {len(ranked)} 条"
         )
         st.markdown(
             f"<p style='color:var(--text-sub); font-size:14px; margin-bottom:8px;'>"
@@ -1133,8 +1131,9 @@ elif view == "detail":
                                theme="dark" if dark else "white",
                                key=f"detail_target_kline_{orig_i}")
                 with kline_right:
-                    st.subheader("📈 候选 K 线")
                     cand_score = cand.get("final_score")
+                    low_sim_tag = "  *(相似度低)*" if cand_score is not None and cand_score < 60 else ""
+                    st.subheader(f"📈 候选 K 线{low_sim_tag}")
                     cand_score_text = (
                         f"  {cand_score:.2f}分"
                         if cand_score is not None else ""

@@ -20,8 +20,7 @@ warnings.filterwarnings('ignore')
 # 配置
 # ============================================================
 
-PROJECT_DIR = os.path.dirname(os.path.abspath(__file__))
-PROJECT_CACHE_DIR = os.path.join(PROJECT_DIR, 'stock_cache')
+PROJECT_CACHE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'stock_cache')
 
 CONFIG = {
     'cache_dir': PROJECT_CACHE_DIR,
