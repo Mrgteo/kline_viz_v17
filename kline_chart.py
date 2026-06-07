@@ -217,10 +217,10 @@ def build_kline_option(
         })
 
     # ===== D1 / D2 / 切面 标注显示开关 =====
-    # D1 / D2 / 切面标注均已隐藏。需要切回时把对应开关改回 True 即可。
+    # D1 / D2 隐藏，切面标注开启并移到更上方避免遮挡K线。需要切回时把对应开关改回 True/False 即可。
     _SHOW_D1_ANCHOR = False
     _SHOW_D2_ANCHOR = False
-    _SHOW_CUT_ANCHOR = False
+    _SHOW_CUT_ANCHOR = True
 
     # 三个标记沿 Y 方向错开，避免相邻日同时存在时叠到一起
     if _SHOW_D1_ANCHOR:
@@ -228,7 +228,7 @@ def build_kline_option(
     if _SHOW_D2_ANCHOR:
         _mk_anchor(d2_s, "D2", D2_LINE_COLOR, -36)
     if _SHOW_CUT_ANCHOR:
-        _mk_anchor(cut_s, "切面", CUT_LINE_COLOR, -18)
+        _mk_anchor(cut_s, "切面", CUT_LINE_COLOR, -54)
 
     form_points = []
     if annotate_forms:
